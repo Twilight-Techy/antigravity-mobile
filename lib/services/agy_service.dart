@@ -781,7 +781,10 @@ class AgentRun {
       agyArgs: agyArgs,
       notify: notify,
     );
-    final r = await service.host.run(command, timeout: const Duration(seconds: 30));
+    final input = scripts.startRunInput(prompt: prompt, agyArgs: agyArgs);
+    final r = input == null
+        ? await service.host.run(command, timeout: const Duration(seconds: 30))
+        : await service.host.runWithInput(command, input, timeout: const Duration(seconds: 30));
     if (!r.ok || !r.stdout.contains('started=')) {
       _finish(RunExit(r.exitCode == 0 ? 1 : r.exitCode, r.combined));
       return;

@@ -20,8 +20,12 @@ class LocalHost implements RemoteHost {
     command = rewrite?.call(command) ?? command;
     final Process p;
     if (command.startsWith('powershell ')) {
-      // The arguments are flags and one base64 string: no quoting needed.
-      p = await Process.start('powershell', command.substring(11).split(' '), environment: environment);
+      // `powershell <flags> -Command "<script>"`; the script has no double
+      // quotes, so Dart's own quoting passes it through unchanged.
+      final i = command.indexOf(' -Command "');
+      final flags = command.substring(11, i).split(' ').where((f) => f.isNotEmpty);
+      final script = command.substring(i + 11, command.length - 1);
+      p = await Process.start('powershell', [...flags, '-Command', script], environment: environment);
     } else {
       p = await Process.start('/bin/sh', ['-c', command], environment: environment);
     }

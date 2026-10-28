@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show GZipCodec;
 
 import 'windows_pty.dart';
 
@@ -117,6 +118,9 @@ abstract class RemoteScripts {
     required List<String> agyArgs,
     RunNotify? notify,
   });
+
+  /// Text [startRun]'s script reads on stdin, if any.
+  String? startRunInput({required String prompt, required List<String> agyArgs}) => null;
 
   /// Follows a detached run from byte [offset]; stdout carries the agent
   /// output and stderr ends with `$exitMarker<code>`. POSIX only.
@@ -670,7 +674,7 @@ exit \$LASTEXITCODE
   String saveApiKey() => wrap(r'''
 $d = "$env:USERPROFILE\.antigravity-mobile"
 New-Item -ItemType Directory -Force -Path $d | Out-Null
-$k = [Console]::In.ReadToEnd().Trim()
+$k = $($agmIn = New-Object IO.MemoryStream; [Console]::OpenStandardInput().CopyTo($agmIn); [Text.Encoding]::UTF8.GetString($agmIn.ToArray())).Trim()
 [IO.File]::WriteAllText("$d\gemini_api_key", $k)
 ''');
 
@@ -796,6 +800,12 @@ Set-Location -LiteralPath ${_path(cwd)}
 exit 0
 ''');
 
+  /// agy's command line, quoted by the MSVC rules; sent on stdin, since a
+  /// long prompt wouldn't fit on cmd.exe's command line.
+  @override
+  String? startRunInput({required String prompt, required List<String> agyArgs}) =>
+      ['-p', prompt, '--output-format', 'stream-json', ...agyArgs].map((a) => '"${msvcEscape(a)}"').join(' ');
+
   /// Starts the run detached from the SSH session: Windows OpenSSH ends a
   /// session's processes with it, but a process created through WMI
   /// (`Win32_Process.Create`) is outside the session. That runner starts
@@ -810,10 +820,6 @@ exit 0
     required List<String> agyArgs,
     RunNotify? notify,
   }) {
-    // The command line agy gets, quoted by the MSVC rules.
-    final argLine = ['-p', prompt, '--output-format', 'stream-json', ...agyArgs]
-        .map((a) => '"${msvcEscape(a)}"')
-        .join(' ');
     // The runner gets the user's default environment, not this session's,
     // so the start script fills in the paths it resolved (`__AGM_…__`).
     // The API key is read from its file, never put on a command line.
@@ -849,7 +855,7 @@ if (-not (Test-Path -LiteralPath ${_path(cwd)})) { [Console]::Error.WriteLine("W
 if (-not (Get-Command agy -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine("agy is not installed or not on PATH"); exit 127 }
 \$cwd = (Resolve-Path -LiteralPath ${_path(cwd)}).Path
 [IO.File]::WriteAllText("\$F.cwd", \$cwd)
-[IO.File]::WriteAllText("\$F.args", ${_decode(argLine)})
+[IO.File]::WriteAllText("\$F.args", \$(\$agmIn = New-Object IO.MemoryStream; [Console]::OpenStandardInput().CopyTo(\$agmIn); [Text.Encoding]::UTF8.GetString(\$agmIn.ToArray())))
 [IO.File]::WriteAllText("\$F.in", "")
 foreach (\$x in @("out", "err", "exit")) { Remove-Item -LiteralPath "\$F.\$x" -Force -ErrorAction SilentlyContinue }
 \$agyPath = (Get-Command agy).Source
@@ -870,17 +876,19 @@ Set-Content -LiteralPath "\$F.pid" -Value \$id
 ''');
   }
 
-  /// `powershell … -EncodedCommand …` running [script].
-  String _powershellCommand(String script, {bool hidden = false}) {
-    final units = <int>[];
-    for (final c in '\$ProgressPreference="SilentlyContinue"\n$script'.codeUnits) {
-      units
-        ..add(c & 0xff)
-        ..add(c >> 8);
-    }
-    return 'powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass '
-        '${hidden ? '-WindowStyle Hidden ' : ''}-EncodedCommand ${base64.encode(units)}';
+  /// `powershell … -Command "…"` running [script]. Windows OpenSSH runs
+  /// commands through cmd.exe, which allows 8191 characters, so the script
+  /// travels gzip-compressed in base64 (no characters cmd.exe treats
+  /// specially) and a short bootstrap expands and runs it.
+  String _powershellCommand(String script, {bool interactive = false, bool noExit = false}) {
+    final gz = base64.encode(GZipCodec(level: 9).encode(utf8.encode('\$ProgressPreference="SilentlyContinue"\n$script')));
+    return 'powershell -NoLogo -NoProfile ${interactive ? '' : '-NonInteractive '}-ExecutionPolicy Bypass '
+        '${noExit ? '-NoExit ' : ''}-Command "${_bootstrap(gz)}"';
   }
+
+  static String _bootstrap(String gz) =>
+      "iex (New-Object IO.StreamReader(New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,[Convert]::FromBase64String('$gz'))),[IO.Compression.CompressionMode]::Decompress))).ReadToEnd()";
+
 
   static const _pushFile = r'$env:USERPROFILE\.antigravity-mobile\push';
 
@@ -910,7 +918,7 @@ if (Test-Path -LiteralPath \$pf) {
 
   @override
   String pushRegister() => wrap('''
-\$l = [Console]::In.ReadToEnd().Trim()
+\$l = \$(\$agmIn = New-Object IO.MemoryStream; [Console]::OpenStandardInput().CopyTo(\$agmIn); [Text.Encoding]::UTF8.GetString(\$agmIn.ToArray())).Trim()
 if (-not \$l) { exit 2 }
 \$d = "\$env:USERPROFILE\\.antigravity-mobile"
 New-Item -ItemType Directory -Force -Path \$d | Out-Null
@@ -923,7 +931,7 @@ Set-Content -LiteralPath "$_pushFile" -Value \$lines
 
   @override
   String pushUnregister() => wrap('''
-\$l = [Console]::In.ReadToEnd().Trim()
+\$l = \$(\$agmIn = New-Object IO.MemoryStream; [Console]::OpenStandardInput().CopyTo(\$agmIn); [Text.Encoding]::UTF8.GetString(\$agmIn.ToArray())).Trim()
 if (-not (Test-Path -LiteralPath "$_pushFile")) { exit 0 }
 \$k = (\$l -split "`t")[1]
 Set-Content -LiteralPath "$_pushFile" -Value @(Get-Content -LiteralPath "$_pushFile" | Where-Object { \$_ -and -not \$_.Contains(\$k) })
@@ -995,14 +1003,7 @@ ${_env()}
 Set-Location -LiteralPath ${_path(cwd)} -ErrorAction SilentlyContinue
 ${runAgy ? '& agy ${agyArgs.map(quote).join(' ')}' : ''}
 ''';
-    final units = <int>[];
-    for (final c in body.codeUnits) {
-      units
-        ..add(c & 0xff)
-        ..add(c >> 8);
-    }
-    return 'powershell -NoLogo -ExecutionPolicy Bypass ${runAgy ? '' : '-NoExit '}'
-        '-EncodedCommand ${base64.encode(units)}';
+    return _powershellCommand(body, interactive: true, noExit: !runAgy);
   }
 
   /// Compiles [windowsPtySource] (uploaded in chunks with [writePtyChunk];
@@ -1062,7 +1063,7 @@ try {
   exit 1
 }
 ''';
-    return wrap('''
+    return _powershellCommand(interactive: true, '''
 ${_env()}
 \$ErrorActionPreference = "Stop"
 \$dir = "\$env:USERPROFILE\\.antigravity-mobile"
