@@ -187,10 +187,21 @@ void main() {
     }, skip: skip ?? (windows ? 'POSIX only' : null));
   });
 
+  test('secrets go over stdin: the API key and push registration', () async {
+    final agy = await service();
+    await agy.setApiKey('test-KEY_123').timeout(const Duration(seconds: 60));
+    final key = File('${home.path}$sep.antigravity-mobile$sep${windows ? 'gemini_api_key' : 'env'}');
+    expect(key.readAsStringSync(), contains('test-KEY_123'));
+    await agy.registerPush('https://relay.example', 'push-key.1').timeout(const Duration(seconds: 60));
+    expect(File('${home.path}$sep.antigravity-mobile${sep}push').readAsStringSync(), contains('https://relay.example\tpush-key.1'));
+    await agy.setApiKey(null).timeout(const Duration(seconds: 60));
+    expect(key.existsSync() && key.readAsStringSync().contains('test-KEY_123'), isFalse);
+  }, skip: skip);
+
   test('a terminal session outlives its connection', () async {
     final agy = await service();
     // The first time, the ConPTY helper is compiled on the server.
-    expect(await agy.ensurePtyHelper(), isTrue);
+    expect(await agy.ensurePtyHelper(), isTrue, reason: agy.ptyHelperError);
     final command = agy.scripts.terminal(
         cwd: project.path, runAgy: true, agyArgs: const [], tmuxSession: 'agm-test-${DateTime.now().millisecondsSinceEpoch}');
     final ansi = RegExp(r'\x1B(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(\x07|\x1B\\)|[()=>][0-9A-Za-z]?)');

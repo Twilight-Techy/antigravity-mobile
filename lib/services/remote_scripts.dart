@@ -81,9 +81,13 @@ abstract class RemoteScripts {
   /// after agy conversation [conversationId] (where agy keeps artifacts).
   String findArtifacts(String conversationId);
 
-  /// Compiles the Windows terminal-session helper from the C# source sent
-  /// on stdin, once (POSIX servers use tmux and need nothing).
+  /// Builds the Windows terminal-session helper, once: prints `ready` when
+  /// it is, or `upload` when its source must be sent first with
+  /// [writePtyChunk] (POSIX servers use tmux and need nothing).
   String installPtyHelper();
+
+  /// Writes chunk [index] (base64) of the helper's source.
+  String writePtyChunk(int index, String chunk);
 
   /// Lists agy's conversations from its stores under ~/.gemini (the CLI's
   /// `antigravity-cli` and the desktop app's `antigravity`): JSON lines
@@ -323,7 +327,10 @@ done
 ''');
 
   @override
-  String installPtyHelper() => wrap(':');
+  String installPtyHelper() => wrap('echo ready');
+
+  @override
+  String writePtyChunk(int index, String chunk) => wrap(':');
 
   @override
   String listConversations() => wrap('''
@@ -998,8 +1005,9 @@ ${runAgy ? '& agy ${agyArgs.map(quote).join(' ')}' : ''}
         '-EncodedCommand ${base64.encode(units)}';
   }
 
-  /// Compiles [windowsPtySource] (sent on stdin; too long for a command
-  /// line) into `~\.antigravity-mobile\agmpty-<version>.dll`.
+  /// Compiles [windowsPtySource] (uploaded in chunks with [writePtyChunk];
+  /// too long for one command line) into
+  /// `~\.antigravity-mobile\agmpty-<version>.dll`.
   @override
   String installPtyHelper() => wrap('''
 \$ErrorActionPreference = "Stop"
@@ -1007,11 +1015,28 @@ ${runAgy ? '& agy ${agyArgs.map(quote).join(' ')}' : ''}
 New-Item -ItemType Directory -Force -Path \$dir | Out-Null
 \$dll = Join-Path (Resolve-Path -LiteralPath \$dir).Path "agmpty-$_ptyVersion.dll"
 if (Test-Path -LiteralPath \$dll) { "ready"; exit 0 }
-\$src = [Console]::In.ReadToEnd()
+\$b = "\$dll.b64"
+if (-not (Test-Path -LiteralPath \$b)) { "upload"; exit 0 }
+\$src = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([IO.File]::ReadAllText(\$b)))
 \$tmp = "\$dll.\$PID.tmp"
-Add-Type -TypeDefinition \$src -ReferencedAssemblies System.Core -OutputAssembly \$tmp -OutputType Library
+try {
+  Add-Type -TypeDefinition \$src -ReferencedAssemblies System.Core -OutputAssembly \$tmp -OutputType Library
+} catch {
+  Remove-Item -LiteralPath \$b -Force -ErrorAction SilentlyContinue
+  [Console]::Error.WriteLine("Could not build the terminal helper: \$_")
+  exit 1
+}
 Move-Item -LiteralPath \$tmp -Destination \$dll -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath \$b -Force -ErrorAction SilentlyContinue
 "ready"
+''');
+
+  @override
+  String writePtyChunk(int index, String chunk) => wrap('''
+\$dir = "\$env:USERPROFILE\\.antigravity-mobile"
+New-Item -ItemType Directory -Force -Path \$dir | Out-Null
+\$b = Join-Path (Resolve-Path -LiteralPath \$dir).Path "agmpty-$_ptyVersion.dll.b64"
+${index == 0 ? '[IO.File]::WriteAllText(\$b, ${quote(chunk)})' : '[IO.File]::AppendAllText(\$b, ${quote(chunk)})'}
 ''');
 
   /// The terminal in a session that survives the connection, like tmux:

@@ -464,17 +464,31 @@ class AgyService {
 
   bool _ptyHelperReady = false;
 
-  /// Makes sure the Windows terminal-session helper is compiled on the
-  /// server. Returns false if it couldn't be (the terminal then runs
-  /// without a persistent session).
+  /// Why the Windows terminal helper couldn't be built, if it couldn't.
+  String? ptyHelperError;
+
+  /// Makes sure the Windows terminal-session helper is built on the server,
+  /// uploading its source in chunks the first time. Returns false if it
+  /// couldn't be (the terminal then runs without a persistent session).
   Future<bool> ensurePtyHelper() async {
     if (!scripts.isWindows || _ptyHelperReady) return true;
     try {
-      final r = await host.runWithInput(scripts.installPtyHelper(), windowsPtySource,
-          timeout: const Duration(minutes: 2));
+      var r = await host.run(scripts.installPtyHelper(), timeout: const Duration(minutes: 2));
+      if (r.ok && r.stdout.contains('upload')) {
+        final b64 = base64.encode(utf8.encode(windowsPtySource));
+        const size = 6000;
+        for (var i = 0, n = 0; i < b64.length; i += size, n++) {
+          final w = await host.run(scripts.writePtyChunk(n, b64.substring(i, i + size > b64.length ? b64.length : i + size)),
+              timeout: const Duration(seconds: 60));
+          if (!w.ok) throw RemoteCommandException('Could not upload the terminal helper.', w);
+        }
+        r = await host.run(scripts.installPtyHelper(), timeout: const Duration(minutes: 2));
+      }
       _ptyHelperReady = r.ok && r.stdout.contains('ready');
-    } catch (_) {
+      ptyHelperError = _ptyHelperReady ? null : r.combined;
+    } catch (e) {
       _ptyHelperReady = false;
+      ptyHelperError = e.toString();
     }
     return _ptyHelperReady;
   }
