@@ -59,10 +59,13 @@ class _WorkspacePickerState extends State<WorkspacePicker> {
                     color: AppColors.surface,
                     border: Border(top: BorderSide(color: AppColors.border)),
                   ),
-                  child: FilledButton.icon(
-                    onPressed: () => session.openWorkspace(path),
-                    icon: const Icon(Icons.folder_open),
-                    label: Text('Open ${baseName(path)}', overflow: TextOverflow.ellipsis),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => session.openWorkspace(path),
+                      icon: const Icon(Icons.folder_open),
+                      label: Text('Open ${baseName(path)}', overflow: TextOverflow.ellipsis),
+                    ),
                   ),
                 ),
               ),

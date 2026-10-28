@@ -206,6 +206,7 @@ class _CodeView extends StatelessWidget {
     );
     return Container(
       color: AppColors.codeBackground,
+      constraints: const BoxConstraints.expand(),
       child: SingleChildScrollView(
         child: wrap ? row : SingleChildScrollView(scrollDirection: Axis.horizontal, child: row),
       ),

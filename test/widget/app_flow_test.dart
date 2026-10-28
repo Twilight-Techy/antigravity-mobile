@@ -117,6 +117,12 @@ void main() {
     await tester.tap(find.text('Files'));
     await settle(tester, 20);
     expect(find.text('pubspec.yaml'), findsOneWidget);
+
+    // Back from the workspace returns to the picker, still connected.
+    await tester.binding.handlePopRoute();
+    await settle(tester);
+    expect(find.text('Open a workspace'), findsOneWidget);
+    expect(host.isClosed, isFalse);
   });
 
   testWidgets('setup installs agy and offers sign-in when signed out', (tester) async {
