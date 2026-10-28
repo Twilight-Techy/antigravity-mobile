@@ -71,6 +71,17 @@ namespace AgmPty {
     public static extern bool WaitNamedPipeW(string lpNamedPipeName, uint nTimeOut);
   }
 
+  /// Off unless `agmpty.trace` sits next to the DLL; then both sides log
+  /// to `agmpty.log` there.
+  public static class Trace {
+    static readonly string Dir = Path.GetDirectoryName(typeof(Trace).Assembly.Location);
+    static readonly bool On = File.Exists(Path.Combine(Dir, "agmpty.trace"));
+    public static void Log(string message) {
+      if (!On) return;
+      try { File.AppendAllText(Path.Combine(Dir, "agmpty.log"), DateTime.Now.ToString("HH:mm:ss.fff") + " " + message + Environment.NewLine); } catch { }
+    }
+  }
+
   public static class Host {
     static readonly object Gate = new object();
     static readonly object InputGate = new object();
@@ -117,6 +128,7 @@ namespace AgmPty {
         try {
           int n;
           while ((n = output.Read(buf, 0, buf.Length)) > 0) {
+            Trace.Log("host: output " + n + " bytes");
             lock (Gate) {
               foreach (Stream c in Clients.ToArray()) {
                 try { c.Write(buf, 0, n); c.Flush(); } catch { Clients.Remove(c); }
@@ -150,6 +162,7 @@ namespace AgmPty {
         while (!ar.AsyncWaitHandle.WaitOne(500)) { if (exited) break; }
         if (exited) { server.Dispose(); break; }
         try { server.EndWaitForConnection(ar); } catch { server.Dispose(); continue; }
+        Trace.Log("host: client connected");
         lock (Gate) { Clients.Add(server); }
         NamedPipeServerStream s = server;
         Thread t = new Thread(delegate() {
@@ -183,6 +196,7 @@ namespace AgmPty {
         if (len < 0 || len > (1 << 20)) return;
         byte[] data = new byte[len];
         if (!ReadFull(s, data, len)) return;
+        Trace.Log("host: message " + head[0] + " (" + len + " bytes)");
         if (head[0] == 0) {
           lock (InputGate) { input.Write(data, 0, len); input.Flush(); }
         } else if ((head[0] == 1 || head[0] == 2) && len >= 4) {
@@ -252,6 +266,7 @@ namespace AgmPty {
         return d;
       };
       byte[] first = sizeBytes();
+      Trace.Log("client: attached (console " + console + ")");
       send(2, first, 4);
 
       Thread reader = new Thread(delegate() {
@@ -285,8 +300,12 @@ namespace AgmPty {
       byte[] ibuf = new byte[4096];
       try {
         int k;
-        while ((k = stdin.Read(ibuf, 0, ibuf.Length)) > 0) send(0, ibuf, k);
-      } catch { }
+        while ((k = stdin.Read(ibuf, 0, ibuf.Length)) > 0) {
+          Trace.Log("client: input " + k + " bytes");
+          send(0, ibuf, k);
+        }
+        Trace.Log("client: input closed");
+      } catch (Exception e) { Trace.Log("client: input failed: " + e.Message); }
       // Our input closed (the SSH session ended): detach, leaving the host.
       return 0;
     }

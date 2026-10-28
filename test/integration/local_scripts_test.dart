@@ -54,7 +54,12 @@ void main() {
   });
 
   tearDownAll(() {
-    if (fake != null) home.deleteSync(recursive: true);
+    // A Windows terminal session may still hold files in it.
+    if (fake != null) {
+      try {
+        home.deleteSync(recursive: true);
+      } catch (_) {}
+    }
   });
 
   Future<AgyService> service({String Function(String)? rewrite}) =>
@@ -202,6 +207,7 @@ void main() {
     final agy = await service();
     // The first time, the ConPTY helper is compiled on the server.
     expect(await agy.ensurePtyHelper(), isTrue, reason: agy.ptyHelperError);
+    File('${home.path}$sep.antigravity-mobile${sep}agmpty.trace').writeAsStringSync('');
     final command = agy.scripts.terminal(
         cwd: project.path, runAgy: true, agyArgs: const [], tmuxSession: 'agm-test-${DateTime.now().millisecondsSinceEpoch}');
     final ansi = RegExp(r'\x1B(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(\x07|\x1B\\)|[()=>][0-9A-Za-z]?)');
