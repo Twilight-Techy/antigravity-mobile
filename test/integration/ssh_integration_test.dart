@@ -14,6 +14,7 @@ import 'package:antigravity_mobile/services/agy_service.dart';
 import 'package:antigravity_mobile/services/message_builder.dart';
 import 'package:antigravity_mobile/services/remote_scripts.dart';
 import 'package:antigravity_mobile/services/ssh_host.dart';
+import 'package:antigravity_mobile/state/chat_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -49,7 +50,7 @@ void main() {
     expect(agy.scripts.isWindows, isFalse);
     expect(agy.info.os.name, 'linux');
     expect(agy.info.agyInstalled, isTrue);
-    expect(agy.info.agyVersion, contains('1.2.4'));
+    expect(agy.info.agyVersion, contains('1.4.4'));
     expect(agy.info.hasGit, isTrue);
   }, skip: skip);
 
@@ -132,14 +133,14 @@ and a second line ✓''';
       if (e is RunLine) {
         lines.add(e.line);
         offset = e.offset;
-        if (e.line.contains('tool_call')) run.detach();
+        if (e.line.contains('"state":"ACTIVE","step_type":"tool"')) run.detach();
       }
     });
     await run.start();
     await done;
     expect(last, isA<RunLost>());
     expect((last as RunLost).resumable, isTrue);
-    expect(lines.last, contains('tool_call'));
+    expect(lines.last, contains('"step_type":"tool"'));
 
     final resumed = agy.createRun(runId: runId, cwd: '~/project', prompt: 'hi', agyArgs: const []);
     final more = <String>[];
@@ -151,7 +152,7 @@ and a second line ✓''';
     await resumed.resume(offset);
     await done2;
     expect(end, isA<RunExit>());
-    expect(more.first, contains('tool_result'));
+    expect(more.first, contains('"state":"DONE","step_type":"tool"'));
     expect(more.last, contains('"result"'));
   }, skip: skip);
 
@@ -167,7 +168,7 @@ and a second line ✓''';
     final sw = Stopwatch()..start();
     final done = run.events.forEach((e) {
       last = e;
-      if (e is RunLine && e.line.contains('tool_call')) run.cancel();
+      if (e is RunLine && e.line.contains('"state":"ACTIVE","step_type":"tool"')) run.cancel();
     });
     await run.start();
     await done;
@@ -220,6 +221,32 @@ and a second line ✓''';
     expect(json['title'], 'Agent finished in my "proj"');
     expect(json['link'], link);
     expect(log, isNot(contains(' hi ')), reason: 'the prompt is never sent');
+  }, skip: skip);
+
+  test('headless runs pass the documented flags and report skipped tools', () async {
+    final run = agy.createRun(
+      runId: 'it-flags-${DateTime.now().microsecondsSinceEpoch}',
+      cwd: '~/project',
+      prompt: 'please deny-me',
+      agyArgs: const ['--agent', 'reviewer', '--add-dir', '/tmp', '--print-timeout', '0s'],
+    );
+    RunEvent? last;
+    final done = run.events.forEach((e) => last = e);
+    await run.start();
+    await done;
+    final exit = last as RunExit;
+    expect(exit.code, 0);
+    expect(skippedTools(exit.stderr), ['Tool run_command was denied: requires approval (headless)']);
+    final args = await host.run("sh -c 'cat \$HOME/.fake_last_args'");
+    expect(args.stdout, contains('--output-format stream-json'));
+    expect(args.stdout, contains('--agent reviewer'));
+    expect(args.stdout, contains('--print-timeout 0s'));
+  }, skip: skip);
+
+  test('runs agy subcommands', () async {
+    expect(await agy.listAgents(), ['reviewer', 'docs-writer']);
+    final rc = await agy.runAgy(const ['remote-control', 'status']);
+    expect(rc.stdout, contains('Remote control'));
   }, skip: skip);
 
   test('finds artifacts saved for a conversation', () async {

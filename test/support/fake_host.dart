@@ -17,14 +17,24 @@ class FakeHost implements RemoteHost {
   bool _closed = false;
 
   /// Lines the fake agent streams for each prompt.
+  /// Lines the fake agent streams for each prompt, in agy's documented
+  /// headless stream-json format.
   List<String> Function(String prompt) agentOutput = (prompt) => [
-        jsonEncode({'type': 'system', 'subtype': 'init', 'conversation_id': 'conv-1'}),
-        jsonEncode({'type': 'text_delta', 'delta': 'Sure! Looking at the project.'}),
-        jsonEncode({'type': 'tool_call', 'id': 't1', 'name': 'run_command', 'input': {'command': 'ls -la'}}),
-        jsonEncode({'type': 'tool_result', 'id': 't1', 'output': 'lib\npubspec.yaml'}),
-        jsonEncode({'type': 'text_delta', 'delta': 'It is a **Flutter** app.'}),
-        jsonEncode({'type': 'result', 'status': 'SUCCESS', 'conversation_id': 'conv-1', 'response': 'It is a **Flutter** app.'}),
+        jsonEncode({'event': 'init', 'cwd': '/home/dev/project', 'permission_mode': 'request-review'}),
+        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 0, 'state': 'DONE', 'step_type': 'user_input'}),
+        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 1, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Sure! Looking at the project.'}),
+        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 1, 'state': 'DONE', 'step_type': 'agent_response'}),
+        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'command': 'ls -la'}}}),
+        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 2, 'state': 'DONE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'command': 'ls -la'}, 'output': 'lib\npubspec.yaml'}}),
+        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 3, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'It is a **Flutter** app.'}),
+        jsonEncode({'event': 'result', 'conversation_id': 'conv-1', 'status': 'SUCCESS', 'response': 'Sure! Looking at the project.It is a **Flutter** app.', 'usage': {'input_tokens': 900, 'output_tokens': 40}}),
       ];
+
+  /// Extra stderr the agent prints (e.g. soft-denied tool notices).
+  List<String> agentStderr = const [];
+
+  /// Last settings.json written by the app.
+  String? writtenSettings;
 
   String _script(String command) {
     const prefix = "sh -c '";
@@ -74,6 +84,12 @@ class FakeHost implements RemoteHost {
     if (script.contains("'diff'")) {
       return const CommandResult(0, 'diff --git a/lib/main.dart b/lib/main.dart\n@@ -1 +1 @@\n-old\n+new\n', '');
     }
+    if (script.contains("agy 'agents'")) return const CommandResult(0, 'reviewer\ndocs-writer\n', '');
+    if (script.contains('settings.json') && script.contains('b64d')) {
+      final b64 = RegExp(r"printf %s '([^']+)' \| b64d").firstMatch(script)?.group(1);
+      if (b64 != null) writtenSettings = utf8.decode(base64.decode(b64));
+      return const CommandResult(0, '', '');
+    }
     if (script.contains('settings.json')) return const CommandResult(0, '', '');
     if (script.contains('kill -INT')) return const CommandResult(0, '', '');
     if (script.contains('echo ok')) return const CommandResult(0, 'ok', '');
@@ -110,7 +126,7 @@ class FakeHost implements RemoteHost {
       final lines = agentOutput(_lastPrompt ?? '');
       return FakeProcess.scripted(
         stdout: lines.map((l) => '$l\n').toList(),
-        stderr: ['${exitMarker}0\n'],
+        stderr: [for (final l in agentStderr) '$l\n', '${exitMarker}0\n'],
       );
     }
     if (script.contains('install.sh')) {

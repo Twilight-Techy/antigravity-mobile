@@ -10,7 +10,10 @@ import '../theme/app_theme.dart';
 import '../widgets/common.dart';
 import '../widgets/message_widgets.dart';
 import '../widgets/remote_browser.dart';
+import 'agent_settings_screen.dart';
+import 'artifacts_screen.dart';
 import 'project_picker.dart';
+import 'server_tools_screen.dart';
 import 'workspace_home.dart';
 
 class ChatView extends StatefulWidget {
@@ -163,29 +166,57 @@ class _ComposerState extends State<_Composer> {
   /// Handles slash commands that need the app or the interactive TUI.
   /// Returns true if handled; anything else is sent to agy as a prompt.
   Future<bool> _handleSlash(String text) async {
-    final cmd = text.split(RegExp(r'\s+')).first.toLowerCase();
+    final words = text.split(RegExp(r'\s+'));
+    final cmd = _slashAliases[words.first.toLowerCase()] ?? words.first.toLowerCase();
+    final arg = words.skip(1).join(' ').trim();
     final chat = context.read<ChatController>();
+    final session = context.read<SessionState>();
     switch (cmd) {
       case '/new':
-      case '/clear':
         chat.newChat(project: chat.current?.project);
         return true;
       case '/model':
         await showModelPicker(context);
         return true;
+      case '/effort':
+        await _effortPicker(chat);
+        return true;
       case '/mode':
-      case '/permissions-mode':
         await showModePicker(context);
         return true;
-      case '/plan':
-      case '/planning':
-        await chat.setOptions(chat.options.copyWith(permissionMode: PermissionMode.plan));
-        if (mounted) showSnack(context, 'Plan mode on');
+      case '/permissions':
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => AgentSettingsScreen(session: session)));
+        return true;
+      case '/artifact':
+        final c = chat.current;
+        if (c != null) {
+          await Navigator.of(context)
+              .push(MaterialPageRoute(builder: (_) => ArtifactsScreen(conversation: c, session: session)));
+        }
+        return true;
+      case '/remote-control':
+      case '/changelog':
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ServerToolsScreen(session: session)));
+        return true;
+      case '/rename':
+        final c = chat.current;
+        if (c != null && arg.isNotEmpty && c.messages.isNotEmpty) await chat.rename(c.id, arg);
+        return true;
+      case '/copy':
+        final last = chat.current?.messages.lastWhere((m) => m.role == MessageRole.agent,
+            orElse: () => ChatMessage(id: '', role: MessageRole.agent, createdAt: DateTime.now()));
+        if (last != null && last.plainText.isNotEmpty && mounted) await copyText(context, last.plainText);
+        return true;
+      case '/add-dir':
+        await pickExtraFolders(context);
+        return true;
+      case '/voice':
+        if (mounted) showSnack(context, "Use your keyboard's dictation (microphone) key to speak a prompt.");
         return true;
     }
     final command = slashCommands.where((c) => c.name == cmd).firstOrNull;
     if (command != null && command.terminal) {
-      await _runInTerminal(text);
+      await _runInTerminal(arg.isEmpty ? cmd + (command.takesArgument ? ' ' : '') : '$cmd $arg');
       return true;
     }
     return false;
@@ -282,6 +313,18 @@ class _ComposerState extends State<_Composer> {
                 children: [
                   _ProjectChip(convo: chat.current),
                   const SizedBox(width: 6),
+                  if (chat.current != null &&
+                      (chat.current!.extraDirs.isNotEmpty ||
+                          (chat.current!.project != null && chat.current!.messages.isEmpty))) ...[
+                    _OptionChip(
+                      key: const Key('folders-chip'),
+                      icon: Icons.create_new_folder_outlined,
+                      label: chat.current!.extraDirs.isEmpty ? 'Folders' : '+${chat.current!.extraDirs.length} folders',
+                      locked: chat.current!.messages.isNotEmpty,
+                      onTap: () => pickExtraFolders(context),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                   _OptionChip(
                     icon: _modeIcon(opts.permissionMode),
                     label: opts.permissionMode.label,
@@ -290,13 +333,10 @@ class _ComposerState extends State<_Composer> {
                   ),
                   const SizedBox(width: 6),
                   _OptionChip(
-                    key: const Key('fast-chip'),
-                    icon: opts.fast ? Icons.fast_forward_rounded : Icons.fast_forward_outlined,
-                    label: opts.fast ? 'Fast: on' : 'Fast: off',
-                    highlight: opts.fast,
-                    locked: true,
-                    // Fast skips planning for quick actions (agy's /fast).
-                    onTap: () => chat.setOptions(opts.copyWith(fast: !opts.fast)),
+                    key: const Key('agent-chip'),
+                    icon: Icons.smart_toy_outlined,
+                    label: opts.agent == null ? 'Default agent' : 'Agent: ${opts.agent}',
+                    onTap: () => showAgentPicker(context),
                   ),
                   const SizedBox(width: 6),
                   _OptionChip(
@@ -400,7 +440,11 @@ class _ComposerState extends State<_Composer> {
               ListTile(
                 leading: Icon(e == chat.options.effort ? Icons.radio_button_checked : Icons.radio_button_off,
                     color: AppColors.accent),
-                title: Text(e == Effort.auto ? 'Auto (agy default)' : e.name[0].toUpperCase() + e.name.substring(1)),
+                title: Text(e == Effort.auto
+                    ? 'Auto (agy default)'
+                    : e == Effort.max
+                        ? 'Max (only some models)'
+                        : e.name[0].toUpperCase() + e.name.substring(1)),
                 onTap: () => Navigator.pop(context, e),
               ),
           ],
@@ -539,7 +583,9 @@ Future<void> showModePicker(BuildContext context) async {
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
             child: Text(
-              'Chat replies run headless, so agy cannot stop to ask for approval. For step-by-step approvals use the Terminal tab.',
+              'Chat replies run headless, so agy cannot stop to ask: tools that need approval are skipped and listed in the reply. '
+              'Allow them with permission rules (Agent menu → Permissions & settings), or use the Terminal for step-by-step approvals '
+              'and the Auto (Preview) mode.',
               style: TextStyle(fontSize: 12, color: AppColors.textFaint),
             ),
           ),
@@ -548,6 +594,78 @@ Future<void> showModePicker(BuildContext context) async {
     ),
   );
   if (picked != null) await chat.setOptions(chat.options.copyWith(permissionMode: picked));
+}
+
+/// Custom agents from `agy agents`, used with `--agent`.
+Future<void> showAgentPicker(BuildContext context) async {
+  final chat = context.read<ChatController>();
+  final agy = context.read<SessionState>().agy;
+  if (agy == null) return;
+  final agents = await agy.listAgents();
+  if (!context.mounted) return;
+  final custom = TextEditingController();
+  final picked = await showModalBottomSheet<String>(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) => SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Center(child: Text('Agent', style: TextStyle(fontWeight: FontWeight.w600))),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'Custom agents are Markdown files in .agents/agents/ (project) or ~/.gemini/config/agents/ (global).',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
+            ),
+            ListTile(
+              leading: Icon(chat.options.agent == null ? Icons.radio_button_checked : Icons.radio_button_off,
+                  color: AppColors.accent),
+              title: const Text('Default agent'),
+              onTap: () => Navigator.pop(context, ''),
+            ),
+            for (final a in agents)
+              ListTile(
+                leading: Icon(chat.options.agent == a ? Icons.radio_button_checked : Icons.radio_button_off,
+                    color: AppColors.accent),
+                title: Text(a),
+                onTap: () => Navigator.pop(context, a),
+              ),
+            if (agents.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text('`agy agents` listed no custom agents.',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12.5)),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: TextField(
+                controller: custom,
+                decoration: InputDecoration(
+                  labelText: 'Agent name',
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.check),
+                    onPressed: () => Navigator.pop(context, custom.text.trim()),
+                  ),
+                ),
+                onSubmitted: (v) => Navigator.pop(context, v.trim()),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+  if (picked == null) return;
+  await chat.setOptions(
+      picked.isEmpty ? chat.options.copyWith(clearAgent: true) : chat.options.copyWith(agent: picked));
 }
 
 Future<void> showModelPicker(BuildContext context) async {
@@ -620,40 +738,83 @@ Future<void> showModelPicker(BuildContext context) async {
 }
 
 class SlashCommand {
-  const SlashCommand(this.name, this.description, {this.terminal = false, this.takesArgument = false});
+  const SlashCommand(this.name, this.description,
+      {this.terminal = false, this.app = false, this.takesArgument = false});
   final String name;
   final String description;
 
   /// Interactive panels that only exist in the TUI.
   final bool terminal;
+
+  /// Handled by the app itself.
+  final bool app;
   final bool takesArgument;
 }
 
+/// Every slash command in the agy reference. `app` ones are handled here,
+/// `terminal` ones are interactive panels opened on this chat's
+/// conversation, and the rest are sent to the agent as prompts.
 const slashCommands = [
-  SlashCommand('/new', 'Start a new conversation'),
-  SlashCommand('/model', 'Choose the model'),
-  SlashCommand('/mode', 'Choose what the agent may do'),
-  SlashCommand('/plan', 'Plan before acting'),
-  SlashCommand('/boost', 'Multi-agent deep reasoning on a task', takesArgument: true),
-  SlashCommand('/fast', 'Skip planning for quick actions', takesArgument: true),
-  SlashCommand('/btw', 'Ask a side question', takesArgument: true),
-  SlashCommand('/config', 'Settings editor', terminal: true),
-  SlashCommand('/permissions', 'Tool permission rules', terminal: true),
-  SlashCommand('/mcp', 'MCP server manager', terminal: true),
-  SlashCommand('/agents', 'Agent manager and background subagents', terminal: true),
-  SlashCommand('/skills', 'Browse loaded skills', terminal: true),
-  SlashCommand('/artifact', 'Artifact review panel', terminal: true),
-  SlashCommand('/diff', 'Interactive diff viewer', terminal: true),
-  SlashCommand('/resume', 'Resume an earlier agy conversation', terminal: true),
-  SlashCommand('/rewind', 'Roll history back', terminal: true),
-  SlashCommand('/tasks', 'Background shell tasks', terminal: true),
+  // In the app.
+  SlashCommand('/new', 'New chat (also /clear)', app: true),
+  SlashCommand('/model', 'Choose the model', app: true),
+  SlashCommand('/effort', 'Reasoning effort, low to max', app: true),
+  SlashCommand('/mode', 'Default, Plan, Accept edits or Full auto', app: true),
+  SlashCommand('/permissions', 'Allow / ask / deny rules', app: true),
+  SlashCommand('/artifact', 'Artifacts of this chat', app: true),
+  SlashCommand('/rename', 'Rename this chat', app: true, takesArgument: true),
+  SlashCommand('/copy', 'Copy the last reply', app: true),
+  SlashCommand('/add-dir', 'Add another folder (before the first message)', app: true),
+  SlashCommand('/remote-control', 'Remote Control, MCP, plugins, update', app: true),
+  SlashCommand('/changelog', 'agy release notes', app: true),
+  // Sent to the agent.
+  SlashCommand('/plan', 'Investigate and draft an implementation plan', takesArgument: true),
+  SlashCommand('/goal', 'Work autonomously until the goal is verified', takesArgument: true),
+  SlashCommand('/grill-me', 'Agent interviews you before starting', takesArgument: true),
+  SlashCommand('/boost', 'Multi-agent deep reasoning (paid plans)', takesArgument: true),
+  SlashCommand('/teamwork-preview', 'Multi-agent teams (paid plans)', takesArgument: true),
+  SlashCommand('/learn', 'Turn corrections into rules or skills', takesArgument: true),
+  // Interactive panels, in the terminal.
+  SlashCommand('/agents', 'Subagents: watch, approve, message', terminal: true),
+  SlashCommand('/tasks', 'Background tasks: logs, stop', terminal: true),
+  SlashCommand('/diff', 'Review per-turn changes, comment lines', terminal: true),
+  SlashCommand('/rewind', 'Roll back to an earlier message', terminal: true),
+  SlashCommand('/fork', 'Branch this conversation', terminal: true),
+  SlashCommand('/btw', 'Side question without interrupting', terminal: true, takesArgument: true),
+  SlashCommand('/schedule', 'Run a task later or on a cron', terminal: true, takesArgument: true),
+  SlashCommand('/browser', 'Browser subagent driving Chrome', terminal: true, takesArgument: true),
+  SlashCommand('/codesearch', 'Code search panel', terminal: true),
+  SlashCommand('/usage', 'Model quota (also /quota)', terminal: true),
+  SlashCommand('/credits', 'AI credits', terminal: true),
   SlashCommand('/context', 'Context-window usage', terminal: true),
-  SlashCommand('/usage', 'Model quota usage', terminal: true),
-  SlashCommand('/credits', 'Credits', terminal: true),
-  SlashCommand('/hooks', 'Review hooks', terminal: true),
+  SlashCommand('/resume', 'Conversations started elsewhere', terminal: true),
+  SlashCommand('/skills', 'Browse skills', terminal: true),
+  SlashCommand('/hooks', 'Browse hooks', terminal: true),
+  SlashCommand('/mcp', 'MCP server manager', terminal: true),
+  SlashCommand('/plugin', 'Plugin manager and marketplace', terminal: true),
+  SlashCommand('/config', 'All settings', terminal: true),
+  SlashCommand('/keybindings', 'Keyboard shortcuts', terminal: true),
+  SlashCommand('/statusline', 'Status bar', terminal: true),
+  SlashCommand('/title', 'Terminal title', terminal: true),
+  SlashCommand('/feedback', 'Send feedback', terminal: true),
   SlashCommand('/logout', 'Sign out of agy', terminal: true),
   SlashCommand('/help', 'Commands and shortcuts', terminal: true),
 ];
+
+/// Aliases from the agy reference.
+const _slashAliases = {
+  '/clear': '/new',
+  '/quota': '/usage',
+  '/settings': '/config',
+  '/switch': '/resume',
+  '/conversation': '/resume',
+  '/undo': '/rewind',
+  '/branch': '/fork',
+  '/cs': '/codesearch',
+  '/search': '/codesearch',
+  '/plugins': '/plugin',
+  '/teamwork': '/teamwork-preview',
+};
 
 class _SlashSheet extends StatelessWidget {
   const _SlashSheet();
@@ -680,7 +841,13 @@ class _SlashSheet extends StatelessWidget {
                   ? const Tooltip(
                       message: 'Opens in the Terminal tab',
                       child: Icon(Icons.terminal, size: 16, color: AppColors.textFaint))
-                  : null,
+                  : c.app
+                      ? const Tooltip(
+                          message: 'Handled in the app',
+                          child: Icon(Icons.phone_android, size: 16, color: AppColors.textFaint))
+                      : const Tooltip(
+                          message: 'Sent to the agent',
+                          child: Icon(Icons.auto_awesome, size: 16, color: AppColors.textFaint)),
               onTap: () => Navigator.pop(context, c),
             ),
         ],

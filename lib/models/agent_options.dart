@@ -1,7 +1,9 @@
 /// How much the agent may do without asking, mapped onto agy's flags.
 enum PermissionMode {
-  /// Default agy behaviour. In headless runs shell and write tools are
-  /// soft-denied unless allowed by rules in settings.json.
+  /// agy's `default` mode. In headless runs workspace reads and writes are
+  /// allowed; shell, web and MCP tools are soft-denied unless allowed by
+  /// rules in settings.json. (`auto` mode falls back to this when headless,
+  /// so it is only offered in the terminal.)
   ask,
 
   /// `--mode plan`: plan first, no edits.
@@ -16,7 +18,7 @@ enum PermissionMode {
 
 extension PermissionModeLabel on PermissionMode {
   String get label => switch (this) {
-        PermissionMode.ask => 'Ask / read-only',
+        PermissionMode.ask => 'Default',
         PermissionMode.plan => 'Plan',
         PermissionMode.acceptEdits => 'Accept edits',
         PermissionMode.fullAuto => 'Full auto (Turbo)',
@@ -24,15 +26,17 @@ extension PermissionModeLabel on PermissionMode {
 
   String get description => switch (this) {
         PermissionMode.ask =>
-          'Uses your permission rules. Unapproved shell commands and writes are skipped.',
-        PermissionMode.plan => 'Agent plans before acting and does not edit files.',
-        PermissionMode.acceptEdits => 'File edits are applied automatically.',
+          'Edits inside the project are allowed. Shell commands, web and MCP tools run only if your permission rules allow them; otherwise they are skipped.',
+        PermissionMode.plan => 'Investigates read-only and drafts an implementation plan before writing code (--mode=plan).',
+        PermissionMode.acceptEdits =>
+          'Approves file edits and creations in the project; shell commands still follow your permission rules (--mode=accept-edits).',
         PermissionMode.fullAuto =>
-          'Like Turbo in Antigravity: every command and edit runs without asking (--dangerously-skip-permissions).',
+          'Every tool call is approved, including shell commands, like Turbo in the Antigravity app (--dangerously-skip-permissions).',
       };
 }
 
-enum Effort { auto, low, medium, high }
+/// `--effort`; `max` is model-dependent.
+enum Effort { auto, low, medium, high, max }
 
 class AgentOptions {
   const AgentOptions({
@@ -40,7 +44,7 @@ class AgentOptions {
     this.permissionMode = PermissionMode.acceptEdits,
     this.effort = Effort.auto,
     this.sandbox = false,
-    this.fast = false,
+    this.agent,
   });
 
   /// Model slug passed with `--model`; null uses agy's default.
@@ -51,8 +55,8 @@ class AgentOptions {
   /// `--sandbox`: restrict terminal execution.
   final bool sandbox;
 
-  /// Fast mode: skip planning for quick actions (agy's `/fast`).
-  final bool fast;
+  /// Custom agent passed with `--agent` (see `agy agents`); null = default.
+  final String? agent;
 
   AgentOptions copyWith({
     String? model,
@@ -60,24 +64,21 @@ class AgentOptions {
     PermissionMode? permissionMode,
     Effort? effort,
     bool? sandbox,
-    bool? fast,
+    String? agent,
+    bool clearAgent = false,
   }) =>
       AgentOptions(
         model: clearModel ? null : (model ?? this.model),
         permissionMode: permissionMode ?? this.permissionMode,
         effort: effort ?? this.effort,
         sandbox: sandbox ?? this.sandbox,
-        fast: fast ?? this.fast,
+        agent: clearAgent ? null : (agent ?? this.agent),
       );
-
-  /// Applies Fast mode to a prompt: agy expands slash commands in headless
-  /// runs, so `/fast <task>` skips planning just like in the TUI.
-  String applyTo(String prompt) =>
-      fast && !prompt.startsWith('/') ? '/fast $prompt' : prompt;
 
   /// Flags shared by the headless chat runs and the interactive terminal.
   List<String> toArgs() => [
         if (model != null && model!.isNotEmpty) ...['--model', model!],
+        if (agent != null && agent!.isNotEmpty) ...['--agent', agent!],
         if (effort != Effort.auto) ...['--effort', effort.name],
         if (sandbox) '--sandbox',
         ...switch (permissionMode) {
@@ -92,6 +93,7 @@ class AgentOptions {
   /// the permission mode is left to agy.
   List<String> toInteractiveArgs() => [
         if (model != null && model!.isNotEmpty) ...['--model', model!],
+        if (agent != null && agent!.isNotEmpty) ...['--agent', agent!],
         if (effort != Effort.auto) ...['--effort', effort.name],
         if (sandbox) '--sandbox',
       ];
@@ -101,7 +103,7 @@ class AgentOptions {
         'permissionMode': permissionMode.name,
         'effort': effort.name,
         'sandbox': sandbox,
-        'fast': fast,
+        'agent': agent,
       };
 
   factory AgentOptions.fromJson(Map<String, dynamic> json) => AgentOptions(
@@ -115,6 +117,6 @@ class AgentOptions {
           orElse: () => Effort.auto,
         ),
         sandbox: json['sandbox'] as bool? ?? false,
-        fast: json['fast'] as bool? ?? false,
+        agent: json['agent'] as String?,
       );
 }

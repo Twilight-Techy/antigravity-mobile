@@ -1,11 +1,16 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../models/conversation.dart';
+import '../../services/agent_stream_parser.dart';
+import '../../state/chat_controller.dart';
+import '../../state/session_state.dart';
+import '../screens/agent_settings_screen.dart';
+import '../screens/artifacts_screen.dart';
 import '../theme/app_theme.dart';
 import 'common.dart';
-import '../screens/artifacts_screen.dart';
 import 'markdown_view.dart';
 
 class UserBubble extends StatelessWidget {
@@ -196,6 +201,10 @@ class _PartView extends StatelessWidget {
         );
       case PartKind.artifact:
         return _ArtifactCard(part: part);
+      case PartKind.subagent:
+        return _SubagentCard(part: part);
+      case PartKind.notice when part.toolName == permissionsNotice:
+        return _SkippedToolsCard(part: part);
       case PartKind.notice:
         return _Collapsible(
           icon: Icons.notes,
@@ -444,6 +453,130 @@ bool madeChanges(ChatMessage m) => m.parts.any((p) =>
     p.toolStatus != ToolStatus.failed &&
     RegExp(r'write|edit|replace|patch|create|delete|remove|move|rename|apply', caseSensitive: false)
         .hasMatch(p.toolName ?? ''));
+
+/// A subagent the agent started: open its own chat, or read its log.
+class _SubagentCard extends StatelessWidget {
+  const _SubagentCard({required this.part});
+  final MessagePart part;
+
+  SubagentInfo? get _info {
+    try {
+      return SubagentInfo.fromJson(Map<String, dynamic>.from(jsonDecode(part.toolInput ?? '{}') as Map));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _openChat(BuildContext context, SubagentInfo info) async {
+    final id = info.conversationId;
+    if (id == null) return;
+    final ok = await context
+        .read<ChatController>()
+        .openSubagent(agyConversationId: id, role: info.role ?? info.typeName ?? 'subagent');
+    if (!ok && context.mounted) showSnack(context, 'Wait for the current reply to finish first.');
+  }
+
+  void _openLog(BuildContext context, SubagentInfo info) {
+    final uri = Uri.tryParse(info.logUri ?? '');
+    final path = uri != null && uri.scheme == 'file' ? uri.toFilePath() : info.logUri;
+    if (path == null) return;
+    openArtifact(context, ArtifactRef(name: '${info.role ?? 'subagent'} log.json', path: path));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final info = _info;
+    final role = info?.role ?? part.toolName ?? 'Subagent';
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_tree_outlined, size: 18, color: AppColors.accent),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text.rich(TextSpan(children: [
+                  TextSpan(text: role, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                  if (info?.typeName != null)
+                    TextSpan(text: '  ${info!.typeName}', style: monoStyle(size: 11.5, color: AppColors.textMuted)),
+                ])),
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 4,
+            children: [
+              if (info?.conversationId != null)
+                TextButton.icon(
+                  onPressed: () => _openChat(context, info!),
+                  icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                  label: const Text('Open chat'),
+                ),
+              if (info?.logUri != null)
+                TextButton.icon(
+                  onPressed: () => _openLog(context, info!),
+                  icon: const Icon(Icons.receipt_long_outlined, size: 16),
+                  label: const Text('View log'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tools headless permissions skipped, with a shortcut to allow them.
+class _SkippedToolsCard extends StatelessWidget {
+  const _SkippedToolsCard({required this.part});
+  final MessagePart part;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 4),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.block, size: 18, color: AppColors.warning),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('Some tools were skipped (not allowed by your permissions)',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          SelectableText(part.text, style: monoStyle(size: 11.5, color: AppColors.textMuted)),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () {
+                final session = context.read<SessionState>();
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => AgentSettingsScreen(session: session)));
+              },
+              child: const Text('Edit permissions'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _ArtifactCard extends StatelessWidget {
   const _ArtifactCard({required this.part});

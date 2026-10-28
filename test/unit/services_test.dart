@@ -5,6 +5,7 @@ import 'package:antigravity_mobile/models/conversation.dart';
 import 'package:antigravity_mobile/models/server_profile.dart';
 import 'package:antigravity_mobile/services/agy_service.dart';
 import 'package:antigravity_mobile/services/remote_scripts.dart';
+import 'package:antigravity_mobile/state/chat_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -129,13 +130,20 @@ void main() {
     expect(c2.messages.single.parts.single.toolStatus, ToolStatus.failed);
   });
 
-  test('fast mode prefixes prompts with /fast and survives JSON', () {
-    const o = AgentOptions(fast: true);
-    expect(o.applyTo('fix the typo'), '/fast fix the typo');
-    expect(o.applyTo('/boost big task'), '/boost big task');
-    expect(const AgentOptions().applyTo('x'), 'x');
-    expect(AgentOptions.fromJson(o.toJson()).fast, isTrue);
-    expect(o.toArgs(), isNot(contains('/fast')));
+  test('agent, effort and modes map to documented flags', () {
+    const o = AgentOptions(agent: 'reviewer', effort: Effort.max, permissionMode: PermissionMode.acceptEdits);
+    expect(o.toArgs(), ['--agent', 'reviewer', '--effort', 'max', '--mode', 'accept-edits']);
+    expect(o.toInteractiveArgs(), ['--agent', 'reviewer', '--effort', 'max']);
+    expect(AgentOptions.fromJson(o.toJson()).agent, 'reviewer');
+    expect(o.copyWith(clearAgent: true).agent, isNull);
     expect(PermissionMode.fullAuto.label, contains('Turbo'));
+  });
+
+
+  test('finds tools that headless permissions skipped on stderr', () {
+    expect(
+        skippedTools('Connecting...\nTool run_command was denied: requires approval\nwrite_file(/etc/x) not allowed\n'),
+        ['Tool run_command was denied: requires approval', 'write_file(/etc/x) not allowed']);
+    expect(skippedTools('all good\n'), isEmpty);
   });
 }

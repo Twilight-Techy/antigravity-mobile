@@ -7,10 +7,12 @@ import '../../state/session_state.dart';
 import '../../state/terminal_session.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
+import 'agent_settings_screen.dart';
 import 'artifacts_screen.dart';
 import 'changes_view.dart';
 import 'chat_view.dart';
 import 'files_view.dart';
+import 'server_tools_screen.dart';
 import 'terminal_view.dart';
 
 /// One open chat: Agent, Files, Changes and Terminal tabs, all working in
@@ -59,7 +61,8 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(convo.messages.isEmpty ? 'New chat' : convo.title, overflow: TextOverflow.ellipsis),
+              Text(convo.messages.isEmpty && convo.parentId == null ? 'New chat' : convo.title,
+                  overflow: TextOverflow.ellipsis),
               Row(
                 children: [
                   StatusDot(
@@ -182,19 +185,47 @@ extension on WorkspaceHomeState {
                 Navigator.of(context)
                     .push(MaterialPageRoute(builder: (_) => ArtifactsScreen(conversation: convo, session: session)));
               }),
-              _item(sheet, Icons.account_tree_outlined, 'Subagents', 'See subagents and message them (/agents)',
+              _item(sheet, Icons.rule, 'Permissions & settings', 'Allow / ask / deny rules, tool permission, sandbox',
+                  () {
+                Navigator.pop(sheet);
+                final session = context.read<SessionState>();
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => AgentSettingsScreen(session: session)));
+              }),
+              _item(sheet, Icons.construction_outlined, 'Antigravity CLI', 'Update, Remote Control, MCP, plugins, agents',
+                  () {
+                Navigator.pop(sheet);
+                final session = context.read<SessionState>();
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => ServerToolsScreen(session: session)));
+              }),
+              const _MenuLabel('IN THE TERMINAL, ON THIS CHAT'),
+              _item(sheet, Icons.account_tree_outlined, 'Subagents', 'Watch, approve and message subagents (/agents)',
                   () => inTerminal('/agents')),
-              _item(sheet, Icons.pending_actions_outlined, 'Background tasks', 'Monitor and stop shell tasks (/tasks)',
+              _item(sheet, Icons.pending_actions_outlined, 'Background tasks', 'Logs and stop (/tasks)',
                   () => inTerminal('/tasks')),
+              _item(sheet, Icons.difference_outlined, 'Review changes', 'Per-turn diffs with line comments (/diff)',
+                  () => inTerminal('/diff')),
+              _item(sheet, Icons.fact_check_outlined, 'Review artifacts', 'Approve or reject, comment (/artifact)',
+                  () => inTerminal('/artifact')),
+              _item(sheet, Icons.undo, 'Rewind', 'Roll back to an earlier message (/rewind)', () => inTerminal('/rewind')),
+              _item(sheet, Icons.call_split, 'Fork', 'Branch this conversation (/fork)', () => inTerminal('/fork')),
+              _item(sheet, Icons.manage_search, 'Code search', 'Search the codebase (/codesearch)',
+                  () => inTerminal('/codesearch')),
+              _item(sheet, Icons.chat_outlined, 'Side question', 'Ask without interrupting the agent (/btw)',
+                  () => inTerminal('/btw ')),
+              _item(sheet, Icons.schedule, 'Schedule', 'Run a task later or on a cron (/schedule)',
+                  () => inTerminal('/schedule ')),
+              _item(sheet, Icons.travel_explore, 'Browser agent', 'Drive Chrome on the server (/browser)',
+                  () => inTerminal('/browser ')),
+              _item(sheet, Icons.data_usage, 'Usage & quota', 'Model quotas (/usage)', () => inTerminal('/usage')),
+              _item(sheet, Icons.toll_outlined, 'Credits', 'AI credits balance (/credits)', () => inTerminal('/credits')),
+              _item(sheet, Icons.donut_large, 'Context window', 'Token usage and context files (/context)',
+                  () => inTerminal('/context')),
+              _item(sheet, Icons.extension_outlined, 'Skills & hooks', 'Browse skills (/skills)', () => inTerminal('/skills')),
+              _item(sheet, Icons.history, 'Other conversations', 'Resume chats started elsewhere (/resume)',
+                  () => inTerminal('/resume')),
               _item(sheet, Icons.terminal, 'Continue in terminal', 'This chat in the full agy interface',
                   () => inTerminal('')),
-              _item(sheet, Icons.data_usage, 'Usage & quota', 'Model quota usage (/usage)', () => inTerminal('/usage')),
-              _item(sheet, Icons.donut_large, 'Context window', 'How full the context is (/context)',
-                  () => inTerminal('/context')),
-              _item(sheet, Icons.rule, 'Permissions', 'Allow rules for tools (/permissions)',
-                  () => inTerminal('/permissions')),
-              _item(sheet, Icons.extension_outlined, 'MCP servers', 'Manage MCP servers (/mcp)', () => inTerminal('/mcp')),
-              _item(sheet, Icons.tune, 'agy settings', 'Settings editor (/config)', () => inTerminal('/config')),
+              _item(sheet, Icons.tune, 'All settings', 'Settings editor (/config)', () => inTerminal('/config')),
             ],
           ),
         ),
@@ -203,10 +234,24 @@ extension on WorkspaceHomeState {
   }
 
   Widget _item(BuildContext context, IconData icon, String title, String subtitle, VoidCallback onTap) => ListTile(
+        dense: true,
         leading: Icon(icon),
         title: Text(title),
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
         onTap: onTap,
+      );
+}
+
+class _MenuLabel extends StatelessWidget {
+  const _MenuLabel(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+        child: Text(text,
+            style: const TextStyle(
+                color: AppColors.textFaint, fontSize: 12, letterSpacing: 1.1, fontWeight: FontWeight.w600)),
       );
 }
 
@@ -221,6 +266,12 @@ class ServerMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       onSelected: (v) async {
         switch (v) {
+          case 'cli':
+            await Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => ServerToolsScreen(session: session)));
+          case 'settings':
+            await Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => AgentSettingsScreen(session: session)));
           case 'setup':
             await context.read<TerminalSession>().stop();
             await session.reopenSetup();
@@ -230,6 +281,14 @@ class ServerMenu extends StatelessWidget {
         }
       },
       itemBuilder: (_) => const [
+        PopupMenuItem(
+          value: 'settings',
+          child: ListTile(leading: Icon(Icons.rule), title: Text('Permissions & settings'), dense: true),
+        ),
+        PopupMenuItem(
+          value: 'cli',
+          child: ListTile(leading: Icon(Icons.construction_outlined), title: Text('Antigravity CLI'), dense: true),
+        ),
         PopupMenuItem(
           value: 'setup',
           child: ListTile(leading: Icon(Icons.build_circle_outlined), title: Text('Server setup'), dense: true),

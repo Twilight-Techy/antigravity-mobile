@@ -137,4 +137,53 @@ void main() {
     expect(arts[1].text, 'Steps');
     expect(m.plainText, 'Plan ready.');
   });
+
+  test('parses the documented agy stream-json events', () {
+    final m = _build([
+      {'event': 'init', 'cwd': '/w', 'tools': ['read_file'], 'permission_mode': 'request-review', 'model': 'gemini-3.1-pro'},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 0, 'state': 'DONE', 'step_type': 'user_input'},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 1, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Let me '},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 1, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'check.'},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 1, 'state': 'DONE', 'step_type': 'agent_response'},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'run_command',
+        'tool_info': {'name': 'run_command', 'parameters': {'command': 'npm test'}}},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 2, 'state': 'DONE', 'step_type': 'tool', 'tool_name': 'run_command',
+        'tool_info': {'name': 'run_command', 'parameters': {'command': 'npm test'}, 'output': '12 passing'}, 'duration_seconds': 3.2},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 3, 'state': 'DONE', 'step_type': 'tool',
+        'tool_info': {'name': 'write_file', 'parameters': {'path': 'x'}, 'error': {'type': 'PERMISSION', 'message': 'denied by rule'}}},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 4, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'invoke_subagent',
+        'subagent_info': {'subagents': [
+          {'type_name': 'research', 'role': 'Docs researcher', 'conversation_id': 'sub-1', 'log_uri': 'file:///home/u/.gemini/logs/sub-1.jsonl', 'workspace_uris': ['file:///w']}
+        ]}},
+      {'event': 'step_update', 'conversation_id': 'c9', 'step_index': 5, 'state': 'DONE', 'step_type': 'checkpoint'},
+      {'event': 'result', 'conversation_id': 'c9', 'status': 'SUCCESS', 'response': 'Let me check.', 'duration_seconds': 9.1, 'num_turns': 1,
+        'usage': {'input_tokens': 2048, 'output_tokens': 300, 'thinking_tokens': 120, 'cache_read_tokens': 1000, 'total_tokens': 3468}},
+    ]);
+    expect(m.plainText, 'Let me check.');
+    final tools = m.parts.where((p) => p.kind == PartKind.tool).toList();
+    expect(tools.map((t) => t.toolName), ['run_command', 'write_file', 'invoke_subagent']);
+    expect(tools[0].toolInput, contains('npm test'));
+    expect(tools[0].toolOutput, '12 passing');
+    expect(tools[0].toolStatus, ToolStatus.done);
+    expect(tools[1].toolStatus, ToolStatus.failed);
+    expect(tools[1].toolOutput, 'denied by rule');
+    final sub = m.parts.singleWhere((p) => p.kind == PartKind.subagent);
+    expect(sub.toolName, 'Docs researcher');
+    expect(sub.toolId, 'sub-1');
+    expect(m.usage, '2.0k in · 300 out · 120 thinking · 1.0k cached');
+  });
+
+  test('cancelled and interrupted results are not errors', () {
+    final m = ChatMessage(id: 'm', role: MessageRole.agent, createdAt: DateTime(2026));
+    final b = MessageBuilder(m);
+    AgentStreamParser().parseLine(jsonEncode({'event': 'result', 'status': 'INTERRUPTED', 'response': ''})).forEach(b.apply);
+    expect(b.resultCancelled, isTrue);
+    expect(m.parts.where((p) => p.kind == PartKind.error), isEmpty);
+    final m2 = ChatMessage(id: 'm', role: MessageRole.agent, createdAt: DateTime(2026));
+    final b2 = MessageBuilder(m2);
+    AgentStreamParser()
+        .parseLine(jsonEncode({'event': 'result', 'status': 'ERROR', 'error': 'authentication required'}))
+        .forEach(b2.apply);
+    expect(m2.parts.single.text, 'authentication required');
+  });
 }

@@ -46,6 +46,10 @@ abstract class RemoteScripts {
   /// Runs `agy models` non-interactively, used as the "signed in?" check.
   String listModels();
 
+  /// Runs `agy <args>` non-interactively (subcommands such as `agents`,
+  /// `mcp list`, `plugin list --json`, `remote-control status`, `update`).
+  String agy(List<String> args);
+
   String readAgySettings();
 
   /// Stores the text sent on stdin as the Gemini API key in a file only the
@@ -208,6 +212,12 @@ fi
   String listModels() => wrap('''
 ${_env()}
 agy models < /dev/null 2>&1
+''');
+
+  @override
+  String agy(List<String> args) => wrap('''
+${_env()}
+agy ${args.map(quote).join(' ')} < /dev/null 2>&1
 ''');
 
   @override
@@ -547,6 +557,13 @@ ${_env()}
   String listModels() => wrap('''
 ${_env()}
 & agy models 2>&1 | ForEach-Object { "\$_" }
+exit \$LASTEXITCODE
+''');
+
+  @override
+  String agy(List<String> args) => wrap('''
+${_env()}
+& agy ${args.map(quote).join(' ')} 2>&1 | ForEach-Object { "\$_" }
 exit \$LASTEXITCODE
 ''');
 

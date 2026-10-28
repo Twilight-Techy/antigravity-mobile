@@ -377,19 +377,23 @@ void main() {
     expect(start, isNot(contains('ntfy.sh')), reason: 'no second notification via ntfy');
   });
 
-  testWidgets('fast mode, artifacts, view changes and the agent menu', (tester) async {
+  testWidgets('agents, subagents, skipped tools, artifacts, changes and the agent menu', (tester) async {
     final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
     await storage.saveProfiles([profile]);
     await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
     await storage.trustHostKey('h:22', 'SHA256:abc123');
     host.agentOutput = (_) => [
-          jsonEncode({'type': 'system', 'subtype': 'init', 'conversation_id': 'conv-1'}),
-          jsonEncode({'type': 'tool_call', 'id': 'e', 'name': 'edit_file', 'input': {'path': 'lib/main.dart'}}),
-          jsonEncode({'type': 'tool_result', 'id': 'e', 'output': 'ok'}),
+          jsonEncode({'event': 'init', 'permission_mode': 'request-review'}),
+          jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 1, 'state': 'DONE', 'step_type': 'tool',
+            'tool_info': {'name': 'edit_file', 'parameters': {'path': 'lib/main.dart'}, 'output': 'ok'}}),
           jsonEncode({'type': 'artifact', 'name': 'implementation_plan.md', 'content': '# The plan'}),
-          jsonEncode({'type': 'text_delta', 'delta': 'Done.'}),
-          jsonEncode({'type': 'result', 'status': 'SUCCESS', 'conversation_id': 'conv-1'}),
+          jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool',
+            'tool_name': 'invoke_subagent',
+            'subagent_info': {'subagents': [{'type_name': 'research', 'role': 'Docs researcher', 'conversation_id': 'sub-1', 'log_uri': 'file:///home/dev/.gemini/sub-1.jsonl'}]}}),
+          jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 3, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Done.'}),
+          jsonEncode({'event': 'result', 'conversation_id': 'conv-1', 'status': 'SUCCESS', 'response': 'Done.'}),
         ];
+    host.agentStderr = ['Tool run_command was denied: requires approval'];
 
     tester.view.physicalSize = const Size(1080, 2340);
     tester.view.devicePixelRatio = 2.75;
@@ -401,29 +405,58 @@ void main() {
     await tester.tap(find.byTooltip('New chat in project'));
     await settle(tester, 20);
 
-    // Fast mode prefixes the prompt with /fast.
-    // The chip row scrolls sideways on a narrow phone.
-    await tester.drag(find.byKey(const Key('project-chip')), const Offset(-200, 0));
+    // Custom agent from `agy agents` is passed with --agent.
+    final chipRow = find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.right).first;
+    await tester.scrollUntilVisible(find.byKey(const Key('agent-chip')), 120, scrollable: chipRow);
+    await tester.drag(chipRow, const Offset(-120, 0));
     await settle(tester, 5);
-    await tester.tap(find.byKey(const Key('fast-chip')));
-    await settle(tester, 5);
-    expect(find.text('Fast: on'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('agent-chip')));
+    await settle(tester, 20);
+    await tester.tap(find.text('reviewer'));
+    await settle(tester, 20);
+    expect(find.text('Agent: reviewer'), findsOneWidget);
     await tester.enterText(find.byType(TextField).last, 'Rename the app');
     await tester.pump();
     await tester.tap(find.byTooltip('Send'));
     await settle(tester, 40);
     final start = host.commands.lastWhere((c) => c.contains('started='));
-    final b64 = RegExp(r"printf %s '([^']+)' \| b64d").firstMatch(start.replaceAll(r"'\''", "'"))!.group(1)!;
-    expect(utf8.decode(base64.decode(b64)), '/fast Rename the app');
+    expect(start, contains('--agent'));
+    expect(start, contains('reviewer'));
+    expect(start, contains('--print-timeout'));
 
-    // The reply shows the artifact and offers to view the edits.
+    // The reply shows the artifact, the subagent and the skipped tool.
     expect(find.text('implementation_plan.md'), findsOneWidget);
+    expect(find.textContaining('Docs researcher', findRichText: true), findsOneWidget);
+    expect(find.text('Tool run_command was denied: requires approval'), findsOneWidget);
+
     await tester.tap(find.text('implementation_plan.md'));
     await settle(tester, 20);
     expect(find.text('Implementation plan'), findsOneWidget);
     expect(find.text('The plan'), findsOneWidget);
     await tester.pageBack();
     await settle(tester);
+
+    // Skipped tools → permissions editor → allow rule saved to settings.json.
+    await tester.ensureVisible(find.text('Edit permissions'));
+    await settle(tester, 5);
+    await tester.tap(find.text('Edit permissions'));
+    await settle(tester, 20);
+    expect(find.text('Permissions & settings'), findsOneWidget);
+    await tester.tap(find.text('Add').first);
+    await settle(tester);
+    await tester.enterText(find.byType(TextField).last, 'command(git)');
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await settle(tester);
+    expect(find.text('command(git)'), findsOneWidget);
+    await tester.tap(find.text('Save'));
+    await settle(tester, 10);
+    expect(jsonDecode(host.writtenSettings!)['permissions']['allow'], ['command(git)']);
+    await tester.pageBack();
+    await settle(tester, 100); // let the "Saved" snack bar go away
+
+    // View changes jumps to the diff.
+    await tester.ensureVisible(find.text('View changes'));
+    await settle(tester, 5);
     await tester.tap(find.text('View changes'));
     await settle(tester, 20);
     expect(find.text('main.dart'), findsOneWidget, reason: 'switched to the Changes tab');
@@ -431,18 +464,17 @@ void main() {
     await settle(tester);
 
     // Agent menu → Artifacts lists reported and saved artifacts.
-    await tester.tap(find.byIcon(Icons.hub_outlined));
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.hub_outlined));
     await settle(tester);
     await tester.tap(find.text('Artifacts'));
     await settle(tester, 20);
     expect(find.text('Implementation plan'), findsOneWidget);
     expect(find.text('Task'), findsOneWidget);
-    expect(host.commands.any((c) => c.contains('-type d -name') && c.contains('conv-1')), isTrue);
     await tester.pageBack();
     await settle(tester);
 
     // Agent menu → Subagents opens this chat's conversation in the terminal.
-    await tester.tap(find.byIcon(Icons.hub_outlined));
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.hub_outlined));
     await settle(tester);
     await tester.tap(find.text('Subagents'));
     await settle(tester, 50);
@@ -450,6 +482,21 @@ void main() {
     expect(pty, contains('--conversation'));
     expect(pty, contains('conv-1'));
     expect(host.lastPty!.written.join(), contains('/agents\r'));
+
+    // A subagent card opens a chat on the subagent's own conversation.
+    await tester.tap(find.text('Agent'));
+    await settle(tester);
+    await tester.ensureVisible(find.text('Open chat'));
+    await settle(tester, 5);
+    await tester.tap(find.text('Open chat'));
+    await settle(tester, 20);
+    expect(find.text('Subagent: Docs researcher'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, 'Status?');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await settle(tester, 40);
+    final toSub = host.commands.lastWhere((c) => c.contains('started='));
+    expect(toSub, contains('sub-1'));
   });
 
   testWidgets('rejecting the host key does not connect', (tester) async {

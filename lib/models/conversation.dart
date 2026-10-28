@@ -2,7 +2,7 @@ enum MessageRole { user, agent }
 
 enum MessageStatus { pending, streaming, done, error, cancelled, interrupted }
 
-enum PartKind { text, thinking, tool, error, notice, artifact }
+enum PartKind { text, thinking, tool, error, notice, artifact, subagent }
 
 enum ToolStatus { running, done, failed }
 
@@ -24,6 +24,8 @@ class MessagePart {
   // Tool-call fields (kind == tool). Artifacts (kind == artifact) use
   // [toolName] for the artifact name, [toolInput] for its path on the
   // server and [text] for its content when the agent sent it inline.
+  // Subagents (kind == subagent) keep their role in [toolName], their agy
+  // conversation id in [toolId] and the full info as JSON in [toolInput].
   String? toolId;
   String? toolName;
   String? toolInput;
@@ -150,8 +152,11 @@ class Conversation {
     required this.createdAt,
     DateTime? updatedAt,
     this.agyConversationId,
+    this.parentId,
+    List<String>? extraDirs,
     List<ChatMessage>? messages,
   })  : updatedAt = updatedAt ?? createdAt,
+        extraDirs = extraDirs ?? [],
         messages = messages ?? [];
 
   final String id;
@@ -163,6 +168,14 @@ class Conversation {
   final DateTime createdAt;
   DateTime updatedAt;
   String? agyConversationId;
+
+  /// Set for a chat opened on a subagent: the chat that started it.
+  final String? parentId;
+
+  /// More folders the agent may use (`--add-dir`), like a multi-folder
+  /// Antigravity project.
+  final List<String> extraDirs;
+
   final List<ChatMessage> messages;
 
   Map<String, dynamic> toJson() => {
@@ -173,6 +186,8 @@ class Conversation {
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         if (agyConversationId != null) 'agyConversationId': agyConversationId,
+        if (parentId != null) 'parentId': parentId,
+        if (extraDirs.isNotEmpty) 'extraDirs': extraDirs,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
 
@@ -185,6 +200,8 @@ class Conversation {
             DateTime.now(),
         updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
         agyConversationId: json['agyConversationId'] as String?,
+        parentId: json['parentId'] as String?,
+        extraDirs: (json['extraDirs'] as List?)?.whereType<String>().toList(),
         messages: (json['messages'] as List? ?? [])
             .map((m) => ChatMessage.fromJson(Map<String, dynamic>.from(m)))
             .toList(),

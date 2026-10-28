@@ -14,6 +14,20 @@ import '../services/storage_service.dart';
 import 'chat_groups.dart';
 import 'session_state.dart';
 
+/// Marks the notice listing tools that headless permissions skipped.
+const permissionsNotice = 'permissions';
+
+/// Lines from agy's stderr saying a tool was soft-denied in headless mode
+/// (it continues without the tool and names it on stderr).
+List<String> skippedTools(String stderr) => stderr
+    .split('\n')
+    .map((l) => l.trim())
+    .where((l) =>
+        l.isNotEmpty &&
+        RegExp(r'denied|not allowed|requires approval|permission', caseSensitive: false).hasMatch(l))
+    .take(10)
+    .toList();
+
 /// Last path segment, handling both separators.
 String workspaceName(String path) {
   final parts = path.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).toList();
@@ -127,6 +141,44 @@ class ChatController extends ChangeNotifier {
     _notify();
   }
 
+  /// Adds or removes an extra folder (`--add-dir`) before the first message.
+  void setExtraDirs(List<String> dirs) {
+    final c = _current;
+    if (c == null || c.messages.isNotEmpty) return;
+    c.extraDirs
+      ..clear()
+      ..addAll(dirs.where((d) => d != c.project).toSet());
+    _notify();
+  }
+
+  /// Opens (creating if needed) a chat on a subagent's own agy conversation,
+  /// so it can be read and messaged like any chat.
+  Future<bool> openSubagent({required String agyConversationId, required String role}) async {
+    final parent = _current;
+    if (busy) return false;
+    final id = 'sub-$agyConversationId';
+    var c = await storage.loadConversation(id);
+    if (c == null) {
+      c = Conversation(
+        id: id,
+        serverId: session.profile.id,
+        project: parent?.project,
+        title: 'Subagent: $role',
+        createdAt: DateTime.now(),
+        agyConversationId: agyConversationId,
+        parentId: parent?.id,
+        extraDirs: parent?.extraDirs.toList(),
+      );
+      await storage.saveConversation(c);
+      await _refreshIndex();
+    }
+    _current = c;
+    _isOpen = true;
+    session.setWorkspace(dirFor(c));
+    _notify();
+    return true;
+  }
+
   /// Opens a saved chat. Returns false if another chat is still running.
   Future<bool> open(String id) async {
     if (busy && _current?.id != id) return false;
@@ -194,7 +246,7 @@ class ChatController extends ChangeNotifier {
       createdAt: now,
       parts: [MessagePart(kind: PartKind.text, text: prompt)],
     ));
-    if (convo.messages.where((m) => m.role == MessageRole.user).length == 1) {
+    if (convo.parentId == null && convo.messages.where((m) => m.role == MessageRole.user).length == 1) {
       final oneLine = prompt.replaceAll(RegExp(r'\s+'), ' ');
       convo.title = oneLine.length > 48 ? '${oneLine.substring(0, 48)}…' : oneLine;
     }
@@ -212,7 +264,11 @@ class ChatController extends ChangeNotifier {
 
     final args = [
       ...options.toArgs(),
+      for (final dir in convo.extraDirs) ...['--add-dir', dir],
       if (convo.agyConversationId != null) ...['--conversation', convo.agyConversationId!],
+      // Long agent tasks must not hit a print-mode time limit
+      // (`0` waits until the turn completes).
+      '--print-timeout', '0s',
     ];
     // With FCM registered this phone already gets a push from the relay,
     // so skip ntfy to avoid a second notification.
@@ -220,7 +276,7 @@ class ChatController extends ChangeNotifier {
     final run = agy.createRun(
       runId: reply.runId!,
       cwd: dirFor(convo),
-      prompt: options.applyTo(prompt),
+      prompt: prompt,
       agyArgs: args,
       notify: session.profile.notifyOnFinish || (ntfy != null && ntfy.isNotEmpty)
           ? RunNotify(
@@ -309,7 +365,9 @@ class ChatController extends ChangeNotifier {
         case RunExit(:final code, :final stderr):
           final success = code == 0;
           builder.finish(success: success);
-          if (!success) {
+          if (builder.resultCancelled) {
+            reply.status = MessageStatus.cancelled;
+          } else if (!success) {
             if (code == 130 || code == 143 || code == 137) {
               reply.status = MessageStatus.cancelled;
             } else {
@@ -327,6 +385,14 @@ class ChatController extends ChangeNotifier {
                     !reply.parts.any((p) => p.kind == PartKind.text)
                 ? MessageStatus.error
                 : MessageStatus.done;
+          }
+          final skipped = skippedTools(stderr);
+          if (skipped.isNotEmpty) {
+            reply.parts.add(MessagePart(
+              kind: PartKind.notice,
+              toolName: permissionsNotice,
+              text: skipped.join('\n'),
+            ));
           }
           _complete(builder, reply);
         case RunLost(:final reason, :final resumable):

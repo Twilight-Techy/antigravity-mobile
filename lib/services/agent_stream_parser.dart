@@ -64,8 +64,45 @@ class ResultEvent extends AgentEvent {
 
   bool get isError {
     final s = status?.toLowerCase();
-    return s != null && (s.contains('error') || s.contains('fail'));
+    return s != null && (s.contains('error') || s.contains('fail') || s == 'invalid');
   }
+
+  /// `CANCELED` / `INTERRUPTED` (e.g. SIGINT).
+  bool get isCancelled {
+    final s = status?.toLowerCase();
+    return s == 'canceled' || s == 'cancelled' || s == 'interrupted';
+  }
+}
+
+/// Subagents the agent started (from `step_update.subagent_info`).
+class SubagentEvent extends AgentEvent {
+  const SubagentEvent(this.subagents);
+  final List<SubagentInfo> subagents;
+}
+
+class SubagentInfo {
+  const SubagentInfo({this.typeName, this.role, this.conversationId, this.logUri, this.workspaceUris = const []});
+  final String? typeName;
+  final String? role;
+  final String? conversationId;
+  final String? logUri;
+  final List<String> workspaceUris;
+
+  Map<String, dynamic> toJson() => {
+        if (typeName != null) 'type_name': typeName,
+        if (role != null) 'role': role,
+        if (conversationId != null) 'conversation_id': conversationId,
+        if (logUri != null) 'log_uri': logUri,
+        if (workspaceUris.isNotEmpty) 'workspace_uris': workspaceUris,
+      };
+
+  factory SubagentInfo.fromJson(Map<String, dynamic> j) => SubagentInfo(
+        typeName: j['type_name'] as String?,
+        role: j['role'] as String?,
+        conversationId: j['conversation_id'] as String?,
+        logUri: j['log_uri'] as String?,
+        workspaceUris: (j['workspace_uris'] as List?)?.whereType<String>().toList() ?? const [],
+      );
 }
 
 /// A line that was not JSON; shown as plain text output.
@@ -117,6 +154,12 @@ class AgentStreamParser {
 
     final convId = _findConversationId(m);
 
+    // The documented agy schema: `event` is init | step_update | result.
+    if (m['event'] == 'init') {
+      return [SessionEvent(conversationId: convId, model: _str(m['model']))];
+    }
+    if (m['event'] == 'step_update') return _stepUpdate(m, convId);
+
     // Final result envelope (also the whole output of --output-format json).
     final isResult = type == 'result' ||
         type == 'final' ||
@@ -127,13 +170,14 @@ class AgentStreamParser {
         (type.isEmpty && m.containsKey('response') && m.containsKey('status'));
     if (isResult) {
       final response = _textOf(m['response'] ?? m['result'] ?? m['output']);
+      // The specific error first, so the result adds no generic one.
+      if (m['error'] != null) events.add(ErrorEvent(_errorText(m['error'])));
       events.add(ResultEvent(
         response: response,
         status: _str(m['status'] ?? m['subtype']),
         usage: _usageSummary(m['usage'] ?? m['stats']),
         conversationId: convId,
       ));
-      if (m['error'] != null) events.add(ErrorEvent(_errorText(m['error'])));
       return events;
     }
 
@@ -272,6 +316,43 @@ class AgentStreamParser {
     final content = m['content'] ?? m['text'] ?? m['response'] ?? m['message'];
     if (content != null) {
       events.addAll(_fromContent(content, thinking: thinking));
+    }
+    return events;
+  }
+
+  /// `step_update`: one step of the turn. `step_type` is `user_input`,
+  /// `agent_response` (streamed via `text_delta`), `tool` (with `tool_info`)
+  /// or `checkpoint`; `state` is `ACTIVE` until the final `DONE`.
+  List<AgentEvent> _stepUpdate(Map<String, dynamic> m, String? convId) {
+    final events = <AgentEvent>[if (convId != null) SessionEvent(conversationId: convId)];
+    final stepType = _str(m['step_type'])?.toLowerCase() ?? '';
+    final done = _str(m['state'])?.toUpperCase() == 'DONE';
+    final id = 'step-${m['step_index'] ?? ''}';
+    switch (stepType) {
+      case 'agent_response':
+        final delta = _str(m['text_delta']);
+        if (delta != null && delta.isNotEmpty) events.add(TextDelta(delta));
+      case 'tool':
+        final info = m['tool_info'] is Map ? Map<String, dynamic>.from(m['tool_info'] as Map) : const <String, dynamic>{};
+        final name = _str(info['name'] ?? m['tool_name']) ?? 'tool';
+        events.add(ToolCallEvent(id: id, name: name, input: _pretty(info['parameters'])));
+        if (done) {
+          final error = info['error'];
+          events.add(ToolResultEvent(
+            id: id,
+            name: name,
+            output: error != null ? _errorText(error) : _textOf(info['output']),
+            isError: error != null,
+          ));
+        }
+    }
+    final sub = m['subagent_info'];
+    if (sub is Map && sub['subagents'] is List) {
+      final list = (sub['subagents'] as List)
+          .whereType<Map>()
+          .map((e) => SubagentInfo.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      if (list.isNotEmpty) events.add(SubagentEvent(list));
     }
     return events;
   }
@@ -417,11 +498,15 @@ class AgentStreamParser {
     }
 
     final input = pick(['input_tokens', 'inputTokens', 'prompt_tokens', 'promptTokens']);
+    final thinking = pick(['thinking_tokens', 'thinkingTokens']);
+    final cached = pick(['cache_read_tokens', 'cacheReadTokens']);
     final output = pick(['output_tokens', 'outputTokens', 'completion_tokens', 'candidates_tokens', 'candidatesTokens']);
     final total = pick(['total_tokens', 'totalTokens']);
     final parts = <String>[
       if (input != null) '${_fmt(input)} in',
       if (output != null) '${_fmt(output)} out',
+      if (thinking != null && thinking > 0) '${_fmt(thinking)} thinking',
+      if (cached != null && cached > 0) '${_fmt(cached)} cached',
       if (input == null && output == null && total != null) '${_fmt(total)} tokens',
     ];
     return parts.isEmpty ? null : parts.join(' · ');

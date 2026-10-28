@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../state/chat_controller.dart';
 import '../../state/session_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
@@ -105,4 +106,63 @@ Future<String?> browseForFolder(BuildContext context) {
       ),
     ),
   ));
+}
+
+/// Extra folders for the open chat (`--add-dir`), editable until the first
+/// message — like adding folders to a multi-folder Antigravity project.
+Future<void> pickExtraFolders(BuildContext context) async {
+  final chat = context.read<ChatController>();
+  final c = chat.current;
+  if (c == null) return;
+  if (c.messages.isNotEmpty) {
+    showSnack(context, 'Folders are fixed once a chat has started. Start a new chat to change them.');
+    return;
+  }
+  final dirs = c.extraDirs.toList();
+  await showModalBottomSheet<void>(
+    context: context,
+    builder: (sheet) => StatefulBuilder(
+      builder: (sheet, setSheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text('More folders', style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text('The agent can also read and edit these folders (--add-dir).',
+                  textAlign: TextAlign.center, style: TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
+            ),
+            for (final d in dirs)
+              ListTile(
+                leading: const Icon(Icons.folder_rounded, color: AppColors.accent),
+                title: Text(baseName(d)),
+                subtitle: Text(d, style: monoStyle(size: 11.5, color: AppColors.textMuted)),
+                trailing: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () {
+                    dirs.remove(d);
+                    chat.setExtraDirs(dirs);
+                    setSheet(() {});
+                  },
+                ),
+              ),
+            ListTile(
+              leading: const Icon(Icons.create_new_folder_outlined),
+              title: const Text('Add a folder…'),
+              onTap: () async {
+                final path = await browseForFolder(sheet);
+                if (path == null) return;
+                if (!dirs.contains(path)) dirs.add(path);
+                chat.setExtraDirs(dirs);
+                setSheet(() {});
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }

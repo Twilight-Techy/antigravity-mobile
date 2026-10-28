@@ -133,7 +133,8 @@ class TerminalSession extends ChangeNotifier {
       await start(conversationId: conversationId);
       await Future.delayed(const Duration(milliseconds: 1500));
     }
-    if (command.isNotEmpty) sendText('$command\r');
+    // A trailing space means "type the rest": don't submit yet.
+    if (command.isNotEmpty) sendText(command.endsWith(' ') ? command : '$command\r');
   }
 
   void sendText(String text) => _pty?.write(utf8.encode(text));

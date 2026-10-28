@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../models/conversation.dart';
 import 'agent_stream_parser.dart';
 
@@ -10,6 +12,10 @@ class MessageBuilder {
 
   /// Latest conversation id reported by agy, if any.
   String? conversationId;
+
+  /// The final `result` status (SUCCESS, ERROR, CANCELED, …), if reported.
+  String? resultStatus;
+  bool resultCancelled = false;
 
   /// True while the last text/thinking part is being built from deltas, so a
   /// following full block of the same kind replaces it instead of repeating.
@@ -91,19 +97,44 @@ class MessageBuilder {
             toolStatus: ToolStatus.done,
           ));
         }
+      case SubagentEvent(:final subagents):
+        _streamingDeltas = false;
+        for (final sub in subagents) {
+          final key = sub.conversationId ?? sub.role ?? sub.typeName ?? '';
+          final existing = message.parts
+              .where((p) => p.kind == PartKind.subagent && (p.toolId ?? p.toolName) == key)
+              .toList();
+          final json = jsonEncode(sub.toJson());
+          if (existing.isNotEmpty) {
+            existing.last.toolInput = json;
+          } else {
+            message.parts.add(MessagePart(
+              kind: PartKind.subagent,
+              toolId: sub.conversationId,
+              toolName: sub.role ?? sub.typeName ?? 'Subagent',
+              toolInput: json,
+              toolStatus: ToolStatus.done,
+            ));
+          }
+        }
       case ErrorEvent(:final message):
         _streamingDeltas = false;
         this.message.parts.add(MessagePart(kind: PartKind.error, text: message));
       case ResultEvent(:final response, :final usage, :final conversationId):
         _streamingDeltas = false;
         if (conversationId != null) this.conversationId = conversationId;
+        resultStatus = event.status;
+        resultCancelled = event.isCancelled;
         if (usage != null) message.usage = usage;
         if (response != null && response.trim().isNotEmpty) {
           final shown = message.parts
               .where((p) => p.kind == PartKind.text)
               .map((p) => p.text)
               .join('\n');
-          if (!shown.contains(response.trim())) {
+          String squash(String x) => x.replaceAll(RegExp(r'\s+'), '');
+          // The final response often repeats the streamed text, possibly
+          // joined differently.
+          if (!shown.contains(response.trim()) && squash(shown) != squash(response)) {
             final last = _last;
             if (last != null &&
                 last.kind == PartKind.text &&
@@ -114,7 +145,7 @@ class MessageBuilder {
             }
           }
         }
-        if (event.isError && !message.parts.any((p) => p.kind == PartKind.error)) {
+        if (event.isError && !event.isCancelled && !message.parts.any((p) => p.kind == PartKind.error)) {
           message.parts.add(MessagePart(
               kind: PartKind.error,
               text: 'The agent finished with status "${event.status}".'));

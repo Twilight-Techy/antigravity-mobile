@@ -28,18 +28,24 @@ over SSH.
   - Replies render as markdown with highlighted code, collapsible thinking,
     and tool-call cards (command, file, search…) showing input and output.
   - Follow-ups continue the same agy conversation (`--conversation <id>`).
-  - Pickers for model (from `agy models`), permission mode (Ask, Plan,
-    Accept edits, Full auto, which is the CLI's version of Turbo),
-    reasoning effort, and a **Fast** toggle that skips planning (`/fast`).
-  - **Artifacts** (plans, task lists, walkthroughs) appear as cards in
-    replies and in the Agent menu's Artifacts screen. That screen also finds
-    files agy saved under the conversation's id in `~/.gemini`.
-  - **Agent menu**: Subagents, Background tasks, Usage & quota, Context,
-    Permissions, MCP and settings open *this chat's own conversation* in the
-    interactive terminal (`agy --conversation <id>`), where you can see and
-    message subagents.
+  - Pickers for model (`agy models`), mode (Default, Plan, Accept edits,
+    Full auto, the CLI's version of Turbo), reasoning effort (low to max)
+    and custom agent (`agy agents` / `--agent`). Extra folders per chat
+    (`--add-dir`).
+  - Tool calls, subagents (open the subagent's own conversation as a chat,
+    or read its log) and **artifacts** render natively. Tools that headless
+    permissions skipped are listed with a shortcut to the **Permissions &
+    settings** editor (allow/ask/deny rules and agy's settings).
+  - **Agent menu**: Artifacts, Permissions & settings, the Antigravity CLI
+    screen (update, release notes, Remote Control, MCP, plugins, agents), and
+    every interactive-only panel (subagents, background tasks, per-turn diff
+    review, artifact review, rewind, fork, /btw, /schedule, /browser, usage
+    and credits, context, skills…), opened on *this chat's own conversation*
+    in the terminal.
   - Replies where the agent edited files get a **View changes** button that
     jumps to the diff.
+  - See [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md) for how every documented
+    agy feature maps to the app.
   - `/` command palette, `@` file mentions, Stop.
   - **Survives your phone sleeping.** On Linux/macOS the agent runs detached
     (`nohup`) and writes to `~/.antigravity-mobile/runs/`. If the connection
@@ -76,24 +82,24 @@ over SSH.
 
 | Need | Mechanism |
 | --- | --- |
-| Chat replies | `agy -p "<prompt>" --output-format stream-json [--conversation id] [--model …] [--mode …]` in the workspace. Detached on POSIX, streamed with `tail -f`, resumable by byte offset |
+| Chat replies | `agy -p "<prompt>" --output-format stream-json --print-timeout 0s [--conversation id] [--mode/--model/--effort/--agent/--add-dir …]` in the chat's folder. Detached on POSIX, streamed with `tail -f`, resumable by byte offset |
 | Sign-in, `/config`, approvals | Interactive `agy` in a PTY (`tmux new-session -A` when available) |
 | Models | `agy models` |
 | Install | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (or `install.ps1` on Windows) |
 | API key | Sent over **stdin** into `~/.antigravity-mobile/env` (mode 600), never on a command line. `modelProvider: "gemini"` is set in `~/.gemini/antigravity-cli/settings.json` |
 | Files / git | `find`/`head`/`base64`/`git` over SSH exec channels |
 
-The stream-json event schema isn't formally documented, so
-`lib/services/agent_stream_parser.dart` is deliberately tolerant. It accepts
-delta/chunk events, tool call/result events, Anthropic-style content blocks
-and the final `{conversation_id, status, response, usage}` envelope. Anything
-unrecognised still shows up, under "Output" or via the raw-output button on
-each reply.
+Replies are parsed from agy's documented headless `stream-json` events:
+`init`, `step_update` (streamed `text_delta`, `tool` steps with
+`tool_info`, `subagent_info`) and the final `result` (status, response,
+usage). `lib/services/agent_stream_parser.dart` also accepts other common
+agent-CLI shapes as a fallback.
 
-Headless runs can't stop to ask for approval. In **Ask** mode agy soft-denies
-shell and write tools unless your `permissions.allow` rules allow them. Use
-**Accept edits** / **Full auto**, or the Terminal tab for interactive
-approvals.
+Headless runs can't stop to ask for approval. Edits inside the project are
+allowed, while shell, web and MCP tools are skipped unless your
+`permissions.allow` rules allow them. The reply lists what was skipped,
+with a shortcut to add rules. Use **Full auto** to allow everything, or the
+Terminal tab for step-by-step approvals.
 
 ## Project layout
 

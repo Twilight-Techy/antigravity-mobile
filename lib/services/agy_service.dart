@@ -264,6 +264,19 @@ class AgyService {
     return AuthCheck(AuthState.unknown, detail: out);
   }
 
+  /// Runs an agy subcommand and returns its output.
+  Future<CommandResult> runAgy(List<String> args, {Duration timeout = const Duration(seconds: 60)}) =>
+      host.run(scripts.agy(args), timeout: timeout);
+
+  /// Custom agents from `agy agents` (names usable with `--agent`).
+  Future<List<String>> listAgents() async {
+    final r = await runAgy(const ['agents'], timeout: const Duration(seconds: 30));
+    if (!r.ok) return const [];
+    return parseModels(r.stdout)
+        .where((a) => !a.toLowerCase().startsWith('no ') && !a.toLowerCase().contains('agents found'))
+        .toList();
+  }
+
   /// Extracts model names from `agy models` output, ignoring headers, table
   /// borders and bullets.
   static List<String> parseModels(String output) {
