@@ -11,6 +11,7 @@ import '../services/links.dart';
 import '../services/message_builder.dart';
 import '../services/remote_scripts.dart';
 import '../services/storage_service.dart';
+import '../services/transcript.dart';
 import 'chat_groups.dart';
 import 'session_state.dart';
 
@@ -88,6 +89,20 @@ class ChatController extends ChangeNotifier {
   /// refresh.
   int completedRuns = 0;
 
+  /// True while the chat list is being synced with the server's agy
+  /// conversations.
+  bool syncing = false;
+  DateTime? lastSynced;
+
+  /// Whether thinking blocks are shown in replies.
+  bool showThinking = true;
+
+  /// True while an opened chat's history is read from agy's transcript.
+  bool loadingHistory = false;
+
+  Timer? _transcriptTimer;
+  Future<void>? _transcriptSync;
+
   /// Called when a reply finishes (done, error or cancelled).
   void Function(Conversation conversation, ChatMessage reply)? onReplyFinished;
 
@@ -113,7 +128,160 @@ class ChatController extends ChangeNotifier {
   }
 
   /// Loads the chat list for this server.
-  Future<void> load() => _refreshIndex();
+  Future<void> load() async {
+    showThinking = await storage.loadShowThinking();
+    await _refreshIndex();
+  }
+
+  Future<void> setShowThinking(bool value) async {
+    showThinking = value;
+    _notify();
+    await storage.saveShowThinking(value);
+  }
+
+  /// Adds the server's agy conversations, from the CLI and the desktop
+  /// app, to the chat list, so any of them can be continued here.
+  Future<void> syncWithServer() async {
+    final agy = session.agy;
+    if (agy == null || !session.isConnected || syncing) return;
+    syncing = true;
+    _notify();
+    try {
+      final remote = await agy.listConversations();
+      final hidden = await storage.loadHiddenConversations(session.profile.id);
+      final index = await storage.loadConversationIndex();
+      final known = {
+        for (final c in index.where((c) => c.serverId == session.profile.id && c.agyConversationId != null))
+          c.agyConversationId!: c,
+      };
+      final running = _builder?.conversationId;
+      final changed = <Conversation>[];
+      final recent = remote.where((r) => r.parentId == null && !hidden.contains(r.id) && r.id != running).toList()
+        ..sort((a, b) => (b.modified ?? DateTime(0)).compareTo(a.modified ?? DateTime(0)));
+      for (final r in recent.take(300)) {
+        final modified = r.modified ?? DateTime.now();
+        final title = _titleOf(r);
+        final local = known[r.id];
+        if (local != null) {
+          // Activity in the CLI or the desktop app moves the chat up.
+          if (modified.isAfter(local.updatedAt.add(const Duration(seconds: 5))) && _current?.id != local.id) {
+            final c = await storage.loadConversation(local.id);
+            if (c != null) {
+              c.updatedAt = modified;
+              if (c.messages.isEmpty) c.serverPreview = r.preview;
+              changed.add(c);
+            }
+          }
+          continue;
+        }
+        final project = r.workspace == null || r.workspace == session.scratchDir ? null : r.workspace;
+        changed.add(Conversation(
+          id: 'agy-${r.id}',
+          serverId: session.profile.id,
+          project: project,
+          title: title,
+          createdAt: modified,
+          updatedAt: modified,
+          agyConversationId: r.id,
+          appDataDir: r.isDesktop ? r.store : null,
+          origin: r.isDesktop ? ChatOrigin.desktop : ChatOrigin.cli,
+          serverPreview: r.preview,
+        ));
+      }
+      await storage.saveConversations(changed);
+      lastSynced = DateTime.now();
+    } catch (_) {
+      // Keep the local list; the next sync tries again.
+    } finally {
+      syncing = false;
+      await _refreshIndex();
+    }
+  }
+
+  static String _titleOf(ServerConversation r) {
+    final t = r.title.trim().isNotEmpty ? r.title.trim() : r.preview.trim();
+    if (t.isEmpty) return 'Untitled conversation';
+    final oneLine = t.replaceAll(RegExp(r'\s+'), ' ');
+    return oneLine.length > 48 ? '${oneLine.substring(0, 48)}…' : oneLine;
+  }
+
+  /// `--app_data_dir` for conversations kept in the desktop app's store.
+  static List<String> storeArgs(String? appDataDir) =>
+      appDataDir == null || appDataDir == ServerConversation.cliStore ? const [] : ['--app_data_dir=$appDataDir'];
+
+  /// Brings [c] up to date with agy's transcript: thinking, tool output and
+  /// turns taken in the CLI or the desktop app. Steps of the latest reply
+  /// made here are merged into it; later turns are added as messages.
+  Future<void> syncTranscript(Conversation c) {
+    final previous = _transcriptSync ?? Future<void>.value();
+    final next = previous.then((_) => _syncTranscript(c)).catchError((_) {});
+    _transcriptSync = next;
+    return next;
+  }
+
+  Future<void> _syncTranscript(Conversation c) async {
+    final agy = session.agy;
+    final id = c.agyConversationId;
+    if (agy == null || id == null || !session.isConnected) return;
+    final store = c.appDataDir ?? ServerConversation.cliStore;
+    final steps = <TranscriptStep>[];
+    var offset = c.transcriptOffset;
+    for (var i = 0; i < 30; i++) {
+      final chunk = await agy.readTranscript(store, id, offset);
+      if (chunk.size < 0) return;
+      if (chunk.size < offset) {
+        // Rewound or rewritten (e.g. /rewind): start over.
+        offset = 0;
+        c.syncedStep = -1;
+        steps.clear();
+        continue;
+      }
+      steps.addAll(TranscriptStep.parseAll(chunk.text));
+      final read = chunk.nextOffset - offset;
+      offset = chunk.nextOffset;
+      if (read <= 0 || offset >= chunk.size) break;
+    }
+    c.transcriptOffset = offset;
+    final fresh = steps.where((s) => s.index > c.syncedStep).toList();
+    if (fresh.isEmpty) return;
+    final lastIndex = fresh.map((s) => s.index).reduce((a, b) => a > b ? a : b);
+
+    // Chats from before this sync existed already show their turns.
+    if (c.syncedStep < 0 && c.origin == ChatOrigin.app && c.messages.isNotEmpty &&
+        !c.messages.any((m) => m.firstStep != null)) {
+      c.syncedStep = lastIndex;
+      return;
+    }
+
+    final reply = c.messages.lastWhere((m) => m.role == MessageRole.agent && m.firstStep != null,
+        orElse: () => ChatMessage(id: '', role: MessageRole.agent, createdAt: DateTime.now()));
+    var rest = fresh;
+    if (reply.id.isNotEmpty) {
+      final from = reply.firstStep!;
+      final nextInput = fresh.where((s) => s.index > from && s.type == 'USER_INPUT').firstOrNull?.index;
+      final mine = fresh.where((s) => s.index > from && (nextInput == null || s.index < nextInput)).toList();
+      if (mine.isNotEmpty) {
+        final merged = Transcript.merge(reply.parts, Transcript.partsByStep(mine), firstStep: from);
+        reply.parts
+          ..clear()
+          ..addAll(merged);
+      }
+      rest = fresh
+          .where((s) => s.index != from && !mine.contains(s))
+          // A chat from before syncing existed shows its earlier turns
+          // already, just without step numbers.
+          .where((s) => c.syncedStep >= 0 || c.origin != ChatOrigin.app || s.index > from)
+          .toList();
+    }
+    if (rest.isNotEmpty) {
+      c.messages.addAll(Transcript.messages(rest, afterStep: c.syncedStep, newId: _uuid.v4));
+      final last = c.messages.last;
+      if (last.createdAt.isAfter(c.updatedAt)) c.updatedAt = last.createdAt;
+    }
+    // While a reply streams, its newest step may not be in the transcript
+    // yet; only count steps the transcript has.
+    c.syncedStep = lastIndex;
+  }
 
   Future<void> _refreshIndex() async {
     final all = await storage.loadConversationIndex();
@@ -134,6 +302,7 @@ class ChatController extends ChangeNotifier {
       project: project,
       title: 'New chat',
       createdAt: DateTime.now(),
+      appDataDir: session.profile.newChatsInDesktopApp ? ServerConversation.desktopStore : null,
     );
     _isOpen = true;
     session.setWorkspace(dirFor(_current!));
@@ -176,6 +345,8 @@ class ChatController extends ChangeNotifier {
         createdAt: DateTime.now(),
         agyConversationId: agyConversationId,
         parentId: parent?.id,
+        appDataDir: parent?.appDataDir,
+        origin: parent?.origin ?? ChatOrigin.app,
         extraDirs: parent?.extraDirs.toList(),
       );
       await storage.saveConversation(c);
@@ -185,7 +356,28 @@ class ChatController extends ChangeNotifier {
     _isOpen = true;
     session.setWorkspace(dirFor(c));
     _notify();
+    unawaited(_catchUp(c));
     return true;
+  }
+
+  /// Loads turns the transcript has that this chat doesn't show yet.
+  Future<void> _catchUp(Conversation c) async {
+    if (busy) return;
+    final before = c.messages.length;
+    final step = c.syncedStep;
+    loadingHistory = c.messages.isEmpty && c.agyConversationId != null;
+    if (loadingHistory) _notify();
+    try {
+      await syncTranscript(c);
+    } finally {
+      loadingHistory = false;
+    }
+    _notify();
+    if (c.messages.length != before || c.syncedStep != step) {
+      _notify();
+      await storage.saveConversation(c);
+      await _refreshIndex();
+    }
   }
 
   /// Opens a saved chat. Returns false if another chat is still running.
@@ -199,7 +391,8 @@ class ChatController extends ChangeNotifier {
     _isOpen = true;
     session.setWorkspace(dirFor(_current!));
     _notify();
-    unawaited(resumePending());
+    final c = _current!;
+    unawaited(resumePending().then((_) => _catchUp(c)));
     return true;
   }
 
@@ -209,8 +402,14 @@ class ChatController extends ChangeNotifier {
     _notify();
   }
 
+  /// Removes a chat from this list. The agy conversation stays on the
+  /// server (the CLI and the desktop app still have it).
   Future<void> delete(String id) async {
     if (busy && _current?.id == id) return;
+    final c = await storage.loadConversation(id);
+    if (c?.agyConversationId != null) {
+      await storage.hideConversation(session.profile.id, c!.agyConversationId!);
+    }
     await storage.deleteConversation(id);
     if (_current?.id == id) {
       _current = null;
@@ -272,6 +471,7 @@ class ChatController extends ChangeNotifier {
     await _save();
 
     final args = [
+      ...storeArgs(convo.appDataDir),
       ...options.toArgs(),
       for (final dir in convo.extraDirs) ...['--add-dir', dir],
       if (convo.agyConversationId != null) ...['--conversation', convo.agyConversationId!],
@@ -359,6 +559,17 @@ class ChatController extends ChangeNotifier {
     }
     final builder = _builder!;
     final parser = AgentStreamParser(resumed: resuming && reply.runOffset > 0);
+    final convo = _current;
+    // agy writes thinking and tool output only to its transcript; fold it
+    // in while the reply streams.
+    _transcriptTimer?.cancel();
+    _transcriptTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (convo == null || reply.firstStep == null || _run != run) return;
+      convo.agyConversationId ??= builder.conversationId;
+      final before = reply.parts.length;
+      await syncTranscript(convo);
+      if (reply.parts.length != before) _scheduleNotify();
+    });
     run.events.listen((event) {
       switch (event) {
         case RunLine(:final line, :final offset):
@@ -415,6 +626,7 @@ class ChatController extends ChangeNotifier {
           }
           _run = null;
           _builder = null;
+          _transcriptTimer?.cancel();
           _notify();
           unawaited(_save());
       }
@@ -428,11 +640,19 @@ class ChatController extends ChangeNotifier {
     }
     _run = null;
     _builder = null;
+    _transcriptTimer?.cancel();
     completedRuns++;
     _notifyTimer?.cancel();
     _notify();
     unawaited(_save());
-    if (convo != null) onReplyFinished?.call(convo, reply);
+    if (convo != null) {
+      onReplyFinished?.call(convo, reply);
+      // The finished reply's thinking and tool output.
+      unawaited(syncTranscript(convo).then((_) {
+        _notify();
+        return _save();
+      }));
+    }
   }
 
   void _onSessionChanged() {
@@ -444,7 +664,7 @@ class ChatController extends ChangeNotifier {
         run.detach();
       }
       Future.delayed(const Duration(milliseconds: 300), resumePending);
-      if (_conversations.isEmpty) unawaited(load());
+      unawaited(load().then((_) => syncWithServer()));
       // The scratch folder path is only known once connected.
       final c = _current;
       if (c != null && _isOpen) session.setWorkspace(dirFor(c));
@@ -479,6 +699,7 @@ class ChatController extends ChangeNotifier {
     session.removeListener(_onSessionChanged);
     _notifyTimer?.cancel();
     _saveTimer?.cancel();
+    _transcriptTimer?.cancel();
     _run?.detach();
     draft.dispose();
     super.dispose();

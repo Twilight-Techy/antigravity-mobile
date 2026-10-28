@@ -58,9 +58,11 @@ class TerminalSession extends ChangeNotifier {
   final List<String> urls = [];
   String _urlTail = '';
 
-  /// agy conversation the terminal was opened on, if any.
+  /// agy conversation the terminal was opened on, if any, and the agy
+  /// store it lives in (null for the CLI's own).
   String? _conversationId;
   String? get conversationId => _conversationId;
+  String? _appDataDir;
 
   /// Name of the tmux session for this server + workspace (and agy
   /// conversation, when the terminal continues a chat).
@@ -83,6 +85,7 @@ class TerminalSession extends ChangeNotifier {
     List<String> extraArgs = const [],
     bool persist = true,
     String? conversationId,
+    String? appDataDir,
   }) async {
     final agy = session.agy;
     if (agy == null || !session.isConnected || _starting) return;
@@ -92,6 +95,7 @@ class TerminalSession extends ChangeNotifier {
     await _closePty();
     _mode = mode;
     _conversationId = mode == TerminalMode.agy ? conversationId : null;
+    _appDataDir = mode == TerminalMode.agy ? appDataDir : null;
     _dir = session.workspace;
     _extraArgs = extraArgs;
     _persist = persist;
@@ -99,6 +103,7 @@ class TerminalSession extends ChangeNotifier {
       cwd: session.workspace ?? '~',
       runAgy: mode == TerminalMode.agy,
       agyArgs: [
+        if (_appDataDir != null && _appDataDir != 'antigravity-cli') '--app_data_dir=$_appDataDir',
         ...session.profile.agentOptions.toInteractiveArgs(),
         if (_conversationId != null) ...['--conversation', _conversationId!],
         ...extraArgs,
@@ -125,10 +130,10 @@ class TerminalSession extends ChangeNotifier {
 
   /// Runs an interactive slash command, e.g. `/agents`, in agy — on the
   /// chat's own conversation when [conversationId] is given.
-  Future<void> runSlashCommand(String command, {String? conversationId}) async {
-    final reuse = running && _mode == TerminalMode.agy && _conversationId == conversationId;
+  Future<void> runSlashCommand(String command, {String? conversationId, String? appDataDir}) async {
+    final reuse = running && _mode == TerminalMode.agy && _conversationId == conversationId && _appDataDir == appDataDir;
     if (!reuse) {
-      await start(conversationId: conversationId);
+      await start(conversationId: conversationId, appDataDir: appDataDir);
       await Future.delayed(const Duration(milliseconds: 1500));
     }
     // A trailing space means "type the rest": don't submit yet.

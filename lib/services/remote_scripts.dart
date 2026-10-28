@@ -79,6 +79,18 @@ abstract class RemoteScripts {
   /// after agy conversation [conversationId] (where agy keeps artifacts).
   String findArtifacts(String conversationId);
 
+  /// Lists agy's conversations from its stores under ~/.gemini (the CLI's
+  /// `antigravity-cli` and the desktop app's `antigravity`): JSON lines
+  /// from agy's conversation index when python3 can read it, otherwise
+  /// `F<TAB>store<TAB>id<TAB>mtime<TAB>first prompt` lines found by
+  /// scanning transcripts.
+  String listConversations();
+
+  /// Prints `size=<bytes>` on the first line, then up to [maxBytes] of
+  /// conversation [id]'s `transcript_full.jsonl` in [store] from byte
+  /// [offset].
+  String readTranscript(String store, String id, int offset, int maxBytes);
+
   String git(String cwd, List<String> args);
 
   /// Diff for an untracked file against an empty file.
@@ -112,6 +124,23 @@ abstract class RemoteScripts {
 
   static String b64(String s) => base64.encode(utf8.encode(s));
 }
+
+/// Reads agy's conversation index (SQLite) read-only.
+const _listConversationsPy = r'''
+import json, os, sqlite3
+home = os.path.expanduser('~/.gemini')
+for store in ('antigravity-cli', 'antigravity'):
+    db = os.path.join(home, store, 'conversation_summaries.db')
+    if not os.path.isfile(db):
+        continue
+    try:
+        c = sqlite3.connect('file:' + db + '?mode=ro', uri=True, timeout=5)
+        rows = c.execute('select conversation_id, title, preview, step_count, last_modified_time, workspace_uris, parent_conversation_id, app_data_dir, killed from conversation_summaries')
+        for r in rows:
+            print(json.dumps({'id': r[0], 'title': r[1], 'preview': r[2], 'steps': r[3], 'modified': r[4], 'workspaces': r[5], 'parent': r[6], 'store': r[7] or store, 'killed': bool(r[8])}))
+    except Exception as e:
+        print(json.dumps({'error': str(e), 'store': store}))
+''';
 
 class PosixScripts extends RemoteScripts {
   const PosixScripts();
@@ -279,6 +308,38 @@ done | head -n 200 | while IFS= read -r f; do
   printf '%s\\t%s\\n' "\$(wc -c < "\$f" | tr -d ' ')" "\$f"
 done
 ''');
+
+  @override
+  String listConversations() => wrap('''
+if command -v python3 >/dev/null 2>&1; then
+python3 -c ${quote(_listConversationsPy)} && exit 0
+fi
+for store in antigravity-cli antigravity; do
+  b="\$HOME/.gemini/\$store/brain"
+  [ -d "\$b" ] || continue
+  skip=\$(ls "\$b"/*/.system_generated/subagents/ 2>/dev/null | sed -n 's/\\.json\$//p')
+  for d in "\$b"/*/; do
+    id=\$(basename "\$d")
+    f="\$d.system_generated/logs/transcript_full.jsonl"
+    [ -f "\$f" ] || continue
+    case " \$(echo \$skip) " in *" \$id "*) continue;; esac
+    t=\$(date -r "\$f" +%s 2>/dev/null || stat -c %Y "\$f" 2>/dev/null || echo 0)
+    p=\$(head -n 1 "\$f" | sed -n 's/.*<USER_REQUEST>\\\\n\\(.*\\)\\\\n<\\/USER_REQUEST>.*/\\1/p' | cut -c1-200)
+    printf 'F\\t%s\\t%s\\t%s\\t%s\\n' "\$store" "\$id" "\$t" "\$p"
+  done
+done
+''');
+
+  @override
+  String readTranscript(String store, String id, int offset, int maxBytes) {
+    final f = '\$HOME/.gemini/$store/brain/$id/.system_generated/logs/transcript_full.jsonl';
+    return wrap('''
+F="$f"
+[ -f "\$F" ] || { echo "size=-1"; exit 0; }
+echo "size=\$(wc -c < "\$F" | tr -d ' ')"
+tail -c +${offset + 1} "\$F" | head -c $maxBytes
+''');
+  }
 
   @override
   String git(String cwd, List<String> args) =>
@@ -635,6 +696,39 @@ foreach (\$app in @('antigravity-cli', 'antigravity')) {
     Select-Object -First 200 |
     ForEach-Object { "\$(\$_.Length)`t\$(\$_.FullName)" }
 }
+''');
+
+  @override
+  String listConversations() => wrap('''
+foreach (\$store in @('antigravity-cli', 'antigravity')) {
+  \$b = Join-Path \$env:USERPROFILE ".gemini\\\$store\\brain"
+  if (-not (Test-Path -LiteralPath \$b)) { continue }
+  \$skip = @(Get-ChildItem -Path (Join-Path \$b '*\\.system_generated\\subagents\\*.json') -ErrorAction SilentlyContinue | ForEach-Object { \$_.BaseName })
+  Get-ChildItem -LiteralPath \$b -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    \$f = Join-Path \$_.FullName '.system_generated\\logs\\transcript_full.jsonl'
+    if ((Test-Path -LiteralPath \$f) -and (\$skip -notcontains \$_.Name)) {
+      \$t = [DateTimeOffset]::new((Get-Item -LiteralPath \$f).LastWriteTimeUtc).ToUnixTimeSeconds()
+      \$first = Get-Content -LiteralPath \$f -TotalCount 1
+      \$p = ''
+      if (\$first -match '<USER_REQUEST>\\\\n(.*?)\\\\n</USER_REQUEST>') { \$p = \$Matches[1] }
+      "F`t\$store`t\$(\$_.Name)`t\$t`t\$p"
+    }
+  }
+}
+''');
+
+  @override
+  String readTranscript(String store, String id, int offset, int maxBytes) => wrap('''
+\$f = Join-Path \$env:USERPROFILE ".gemini\\$store\\brain\\$id\\.system_generated\\logs\\transcript_full.jsonl"
+if (-not (Test-Path -LiteralPath \$f)) { "size=-1"; exit 0 }
+\$s = [IO.File]::Open(\$f, 'Open', 'Read', 'ReadWrite')
+try {
+  "size=\$(\$s.Length)"
+  [void]\$s.Seek($offset, 'Begin')
+  \$buf = New-Object byte[] ([Math]::Max(0, [Math]::Min($maxBytes, \$s.Length - $offset)))
+  \$n = \$s.Read(\$buf, 0, \$buf.Length)
+  [Console]::Out.Write([Text.Encoding]::UTF8.GetString(\$buf, 0, \$n))
+} finally { \$s.Close() }
 ''');
 
   @override

@@ -26,5 +26,21 @@ commands, is agy's own.
 | `diff_rejected` | `/diff` | interactive-only commands are refused in print mode (exit 2) |
 | `signed_out` | no credentials | headless runs print a sign-in URL, wait 60s for a code, then fail |
 
+`transcript_*.jsonl` are agy's own record of a conversation,
+`~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/transcript_full.jsonl`.
+It has what the stream leaves out: the model's thinking (`thinking` on
+`PLANNER_RESPONSE` steps), each tool call's full arguments and its output
+(the following `GENERIC` step), and system messages. Step numbers match the
+stream's `step_index`.
+
+| Fixture | Shows |
+| --- | --- |
+| `transcript_followups` | a conversation continued twice, with system notices |
+| `transcript_goal` | `/goal`'s system-driven turns, with thinking |
+| `transcript_artifact` | `write_file` of an artifact and its output |
+| `transcript_tool_error` | a failed tool step |
+| `transcript_subagent` | `define_subagent`, `invoke_subagent` (with the new conversation's id) and the subagent's report |
+| `signin_tui_50cols.raw` | the interactive sign-in screen at phone width: the link is wrapped, but complete in an OSC 8 hyperlink |
+
 To re-run the app's SSH pipeline against the real binary, see
 `test/integration/real_agy_test.dart`.

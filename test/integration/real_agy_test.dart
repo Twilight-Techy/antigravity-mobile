@@ -20,6 +20,8 @@ import 'package:antigravity_mobile/services/agent_stream_parser.dart';
 import 'package:antigravity_mobile/services/agy_service.dart';
 import 'package:antigravity_mobile/services/message_builder.dart';
 import 'package:antigravity_mobile/services/ssh_host.dart';
+import 'package:antigravity_mobile/services/transcript.dart';
+import 'package:antigravity_mobile/state/chat_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -54,12 +56,12 @@ void main() {
   });
 
   Future<({ChatMessage message, MessageBuilder builder, RunExit exit})> send(String prompt,
-      {String? conversation}) async {
+      {String? conversation, List<String> extraArgs = const []}) async {
     final run = agy.createRun(
       runId: 'real-${DateTime.now().microsecondsSinceEpoch}',
       cwd: '~/project',
       prompt: prompt,
-      agyArgs: [if (conversation != null) ...['--conversation', conversation], '--print-timeout', '0s'],
+      agyArgs: [...extraArgs, if (conversation != null) ...['--conversation', conversation], '--print-timeout', '0s'],
     );
     final message = ChatMessage(id: 'm', role: MessageRole.agent, createdAt: DateTime.now());
     final builder = MessageBuilder(message);
@@ -146,6 +148,47 @@ void main() {
     // agy reports SIGINT as status ERROR with the error "interrupted".
     expect(builder.resultCancelled, isTrue, reason: 'status ${builder.resultStatus}, code ${exit.code}');
     expect(message.plainText, isNot(contains('Finally done.')));
+  }, skip: skip);
+
+  test('one history: CLI and desktop-app conversations are listed, read and continued', () async {
+    // A conversation started in the CLI, and one in the desktop app's store
+    // (what the Antigravity desktop app on that machine writes to).
+    Future<String> startIn(List<String> store, String prompt) async {
+      final r = await agy.runAgy([...store, '-p', prompt, '--output-format', 'stream-json'],
+          timeout: const Duration(minutes: 2));
+      final result = r.stdout.split('\n').lastWhere((l) => l.contains('"event":"result"'));
+      return (jsonDecode(result)['result'] as Map)['conversation_id'] as String;
+    }
+
+    final cliId = await startIn(const [], 'hello from the cli');
+    final deskId = await startIn(ChatController.storeArgs(ServerConversation.desktopStore), 'hello from the desktop');
+
+    final listed = await agy.listConversations();
+    final cli = listed.singleWhere((c) => c.id == cliId);
+    final desk = listed.singleWhere((c) => c.id == deskId);
+    expect(cli.store, ServerConversation.cliStore);
+    expect(desk.isDesktop, isTrue);
+    expect(desk.workspace, isNotNull);
+
+    // History, thinking included, from the transcript.
+    final chunk = await agy.readTranscript(desk.store, deskId, 0);
+    final history = Transcript.messages(TranscriptStep.parseAll(chunk.text), newId: () => 'x');
+    expect(history.first.plainText, 'hello from the desktop');
+    expect(history[1].parts.where((p) => p.kind == PartKind.thinking), isNotEmpty);
+
+    // Continue it from the phone, in its own store.
+    final reply = await send('and from the phone',
+        conversation: deskId, extraArgs: ChatController.storeArgs(desk.store));
+    expect(reply.exit.code, 0);
+    expect(reply.builder.conversationId, deskId);
+    final after = await agy.readTranscript(desk.store, deskId, chunk.nextOffset);
+    final added = TranscriptStep.parseAll(after.text);
+    expect(added.where((s) => s.type == 'USER_INPUT').map((s) => Transcript.userText(s.content)), ['and from the phone']);
+
+    // A streamed reply gains its thinking from the transcript.
+    final firstStep = reply.message.firstStep!;
+    final merged = Transcript.merge(reply.message.parts, Transcript.partsByStep(added), firstStep: firstStep);
+    expect(merged.where((p) => p.kind == PartKind.thinking), isNotEmpty);
   }, skip: skip);
 
   test('headless reports: usage, effort, model', () async {

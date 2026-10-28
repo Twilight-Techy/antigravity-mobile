@@ -21,6 +21,9 @@ class StorageService {
   static const _conversationIndexKey = 'conversations.index.v1';
   static String _conversationKey(String id) => 'conversation.$id.v1';
   static String _secretKey(String id) => 'secrets.$id';
+  static String _hiddenKey(String serverId) => 'hidden_agy.$serverId.v1';
+  static const _showThinkingKey = 'show_thinking.v1';
+  static const _maxConversations = 400;
 
   Future<List<ServerProfile>> loadProfiles() async {
     final raw = await _prefs.getString(_profilesKey);
@@ -99,21 +102,41 @@ class StorageService {
     }
   }
 
-  Future<void> saveConversation(Conversation conversation) async {
-    await _prefs.setString(
-        _conversationKey(conversation.id), jsonEncode(conversation.toJson()));
+  Future<void> saveConversation(Conversation conversation) => saveConversations([conversation]);
+
+  /// Saves several conversations, updating the index once.
+  Future<void> saveConversations(List<Conversation> conversations) async {
+    if (conversations.isEmpty) return;
     final index = await loadConversationIndex();
-    index.removeWhere((c) => c.id == conversation.id);
-    index.insert(0, ConversationSummary.of(conversation));
+    for (final conversation in conversations) {
+      await _prefs.setString(
+          _conversationKey(conversation.id), jsonEncode(conversation.toJson()));
+      index.removeWhere((c) => c.id == conversation.id);
+      index.add(ConversationSummary.of(conversation));
+    }
     index.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     // Keep storage bounded.
-    while (index.length > 200) {
+    while (index.length > _maxConversations) {
       final dropped = index.removeLast();
       await _prefs.remove(_conversationKey(dropped.id));
     }
     await _prefs.setString(
         _conversationIndexKey, jsonEncode(index.map((c) => c.toJson()).toList()));
   }
+
+  /// agy conversations removed from this server's chat list, so syncing
+  /// with the server doesn't bring them back.
+  Future<Set<String>> loadHiddenConversations(String serverId) async =>
+      (await _prefs.getStringList(_hiddenKey(serverId)))?.toSet() ?? {};
+
+  Future<void> hideConversation(String serverId, String agyConversationId) async {
+    final hidden = await loadHiddenConversations(serverId)..add(agyConversationId);
+    await _prefs.setStringList(_hiddenKey(serverId), hidden.toList());
+  }
+
+  Future<bool> loadShowThinking() async => await _prefs.getBool(_showThinkingKey) ?? true;
+
+  Future<void> saveShowThinking(bool value) => _prefs.setBool(_showThinkingKey, value);
 
   Future<void> deleteConversation(String id) async {
     await _prefs.remove(_conversationKey(id));
@@ -142,6 +165,8 @@ class ConversationSummary {
     required this.title,
     required this.updatedAt,
     this.preview = '',
+    this.agyConversationId,
+    this.origin = ChatOrigin.app,
   });
 
   final String id;
@@ -151,6 +176,10 @@ class ConversationSummary {
   final String title;
   final DateTime updatedAt;
   final String preview;
+  final String? agyConversationId;
+
+  /// Where the chat was started (this app, the CLI or the desktop app).
+  final ChatOrigin origin;
 
   factory ConversationSummary.of(Conversation c) {
     final lastAgent = c.messages.lastWhere(
@@ -159,7 +188,8 @@ class ConversationSummary {
           ? ChatMessage(id: '', role: MessageRole.agent, createdAt: DateTime.now())
           : c.messages.last,
     );
-    final preview = lastAgent.plainText.replaceAll(RegExp(r'\s+'), ' ');
+    final text = lastAgent.plainText;
+    final preview = (text.isEmpty ? c.serverPreview ?? '' : text).replaceAll(RegExp(r'\s+'), ' ');
     return ConversationSummary(
       id: c.id,
       serverId: c.serverId,
@@ -167,6 +197,8 @@ class ConversationSummary {
       title: c.title,
       updatedAt: c.updatedAt,
       preview: preview.length > 120 ? '${preview.substring(0, 120)}…' : preview,
+      agyConversationId: c.agyConversationId,
+      origin: c.origin,
     );
   }
 
@@ -177,6 +209,8 @@ class ConversationSummary {
         'title': title,
         'updatedAt': updatedAt.toIso8601String(),
         'preview': preview,
+        if (agyConversationId != null) 'agyConversationId': agyConversationId,
+        'origin': origin.name,
       };
 
   factory ConversationSummary.fromJson(Map<String, dynamic> json) =>
@@ -188,6 +222,8 @@ class ConversationSummary {
         updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
             DateTime.now(),
         preview: json['preview'] as String? ?? '',
+        agyConversationId: json['agyConversationId'] as String?,
+        origin: ChatOrigin.values.firstWhere((o) => o.name == json['origin'], orElse: () => ChatOrigin.app),
       );
 }
 

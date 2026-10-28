@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/conversation.dart';
 import '../../services/agent_stream_parser.dart';
+import '../../services/transcript.dart';
 import '../../state/chat_controller.dart';
 import '../../state/session_state.dart';
 import '../../state/terminal_session.dart';
@@ -53,12 +54,16 @@ class AgentMessageView extends StatelessWidget {
   const AgentMessageView({
     super.key,
     required this.message,
+    this.showThinking = true,
     this.onCancel,
     this.onResume,
     this.onViewChanges,
   });
 
   final ChatMessage message;
+
+  /// Thinking blocks are shown collapsed, or hidden entirely.
+  final bool showThinking;
   final VoidCallback? onCancel;
   final VoidCallback? onResume;
 
@@ -67,7 +72,7 @@ class AgentMessageView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final parts = message.parts;
+    final parts = showThinking ? message.parts : message.parts.where((p) => p.kind != PartKind.thinking).toList();
     final active = message.isActive;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -208,6 +213,14 @@ class _PartView extends StatelessWidget {
         return _SkippedToolsCard(part: part);
       case PartKind.notice when part.toolName == signInNotice:
         return const _SignInCard();
+      case PartKind.notice when part.toolName == systemNotice:
+        final firstLine = part.text.split('\n').first.replaceFirst(RegExp(r'^\[[A-Za-z]+\]\s*'), '');
+        return _Collapsible(
+          icon: Icons.info_outline,
+          title: firstLine.length > 60 ? 'System: ${firstLine.substring(0, 60)}…' : 'System: $firstLine',
+          initiallyExpanded: false,
+          child: SelectableText(part.text, style: const TextStyle(color: AppColors.textMuted, fontSize: 13, height: 1.4)),
+        );
       case PartKind.notice:
         return _Collapsible(
           icon: Icons.notes,
@@ -408,7 +421,12 @@ class _CollapsibleState extends State<_Collapsible> {
               children: [
                 Icon(widget.icon, size: 16, color: AppColors.textFaint),
                 const SizedBox(width: 6),
-                Text(widget.title, style: const TextStyle(color: AppColors.textMuted, fontSize: 13)),
+                Flexible(
+                  child: Text(widget.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: AppColors.textMuted, fontSize: 13)),
+                ),
                 Icon(_open ? Icons.expand_less : Icons.expand_more, size: 16, color: AppColors.textFaint),
               ],
             ),

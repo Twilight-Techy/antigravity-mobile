@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:antigravity_mobile/main.dart';
 import 'package:antigravity_mobile/models/conversation.dart';
@@ -520,5 +521,65 @@ void main() {
     await settle(tester);
     expect(find.textContaining("Couldn't connect"), findsOneWidget);
     expect(find.textContaining('Host key was rejected'), findsOneWidget);
+  });
+
+  testWidgets('chats from the CLI and the desktop app appear and can be continued', (tester) async {
+    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
+    await storage.saveProfiles([profile]);
+    await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
+    await storage.trustHostKey('h:22', 'SHA256:abc123');
+    String row(String id, String store, String title, {String parent = ''}) => jsonEncode({
+          'id': id, 'title': title, 'preview': title, 'steps': 8, 'modified': '2026-10-28 14:08:53.5+00:00',
+          'workspaces': '["file:///home/dev/project"]', 'parent': parent, 'store': store, 'killed': false,
+        });
+    host.serverConversations = [
+      row('cli-conv-1', 'antigravity-cli', 'Started in the CLI'),
+      row('desk-conv-1', 'antigravity', 'Started on the desktop'),
+      row('sub-conv-1', 'antigravity-cli', 'A subagent', parent: 'cli-conv-1'),
+    ];
+    // Transcripts recorded from agy 1.4.9.
+    host.transcripts['cli-conv-1'] = File('test/fixtures/agy_1_4_9/transcript_followups.jsonl').readAsStringSync();
+    host.transcripts['desk-conv-1'] = File('test/fixtures/agy_1_4_9/transcript_goal.jsonl').readAsStringSync();
+
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(AntigravityMobileApp(storage: storage, connector: connector));
+    await settle(tester);
+    await tester.tap(find.text('VPS'));
+    await settle(tester, 40);
+
+    // Both stores are listed under the project, marked by origin; subagents aren't.
+    expect(find.text('Started in the CLI'), findsOneWidget);
+    expect(find.text('Started on the desktop'), findsOneWidget);
+    expect(find.text('CLI'), findsOneWidget);
+    expect(find.text('Desktop'), findsOneWidget);
+    expect(find.text('A subagent'), findsNothing);
+
+    // Opening one loads its history from agy's transcript, thinking included.
+    await tester.tap(find.text('Started on the desktop'));
+    await settle(tester, 40);
+    expect(host.commands.any((c) => c.contains('brain/desk-conv-1/') && c.contains('transcript_full.jsonl')), isTrue);
+    expect(find.text('Hello! How can I help?'), findsWidgets);
+    expect(find.text('Thought'), findsWidgets);
+    expect(find.textContaining('System: Stop hook blocked termination'), findsWidgets);
+
+    // Thinking can be hidden.
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.hub_outlined));
+    await settle(tester);
+    await tester.tap(find.text('Show thinking'));
+    await settle(tester);
+    await tester.tapAt(const Offset(20, 40));
+    await settle(tester);
+    expect(find.text('Thought'), findsNothing);
+
+    // A reply goes to the desktop app's conversation, in its own store.
+    await tester.enterText(find.byType(TextField).last, 'Keep going');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await settle(tester, 40);
+    final start = host.commands.lastWhere((c) => c.contains('started='));
+    expect(start, contains('--app_data_dir=antigravity'));
+    expect(start, contains('desk-conv-1'));
   });
 }

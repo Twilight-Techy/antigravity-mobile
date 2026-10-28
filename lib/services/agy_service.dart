@@ -217,6 +217,102 @@ class AgyReport {
   }
 }
 
+/// A conversation in one of agy's stores on the server, from
+/// [AgyService.listConversations].
+class ServerConversation {
+  const ServerConversation({
+    required this.id,
+    required this.store,
+    this.title = '',
+    this.preview = '',
+    this.steps,
+    this.modified,
+    this.workspace,
+    this.parentId,
+  });
+
+  final String id;
+
+  /// agy's data folder under ~/.gemini: `antigravity-cli` (the CLI) or
+  /// `antigravity` (the desktop app).
+  final String store;
+  final String title;
+  final String preview;
+  final int? steps;
+  final DateTime? modified;
+
+  /// The conversation's folder, when agy's index says.
+  final String? workspace;
+  final String? parentId;
+
+  static const cliStore = 'antigravity-cli';
+  static const desktopStore = 'antigravity';
+
+  bool get isDesktop => store != cliStore;
+
+  /// Parses [AgyService.listConversations] output: JSON lines from agy's
+  /// index, or `F<TAB>…` lines from scanning transcripts.
+  static List<ServerConversation> parseList(String output, {bool windows = false}) {
+    final byId = <String, ServerConversation>{};
+    for (final line in const LineSplitter().convert(output)) {
+      ServerConversation? c;
+      if (line.startsWith('{')) {
+        try {
+          final m = jsonDecode(line);
+          if (m is Map && m['id'] is String && m['error'] == null) {
+            String? workspace;
+            try {
+              final uris = jsonDecode(m['workspaces'] as String? ?? '[]');
+              final first = uris is List ? uris.whereType<String>().firstOrNull : null;
+              final uri = first == null ? null : Uri.tryParse(first);
+              if (uri != null && uri.scheme == 'file') workspace = uri.toFilePath(windows: windows);
+            } catch (_) {}
+            final parent = m['parent'] as String? ?? '';
+            if (m['killed'] == true && parent.isNotEmpty) continue;
+            c = ServerConversation(
+              id: m['id'] as String,
+              store: m['store'] as String? ?? cliStore,
+              title: m['title'] as String? ?? '',
+              preview: m['preview'] as String? ?? '',
+              steps: (m['steps'] as num?)?.toInt(),
+              modified: DateTime.tryParse(m['modified'] as String? ?? '')?.toLocal(),
+              workspace: workspace,
+              parentId: parent.isEmpty ? null : parent,
+            );
+          }
+        } catch (_) {}
+      } else if (line.startsWith('F\t')) {
+        final f = line.split('\t');
+        if (f.length >= 4) {
+          final secs = int.tryParse(f[3]) ?? 0;
+          c = ServerConversation(
+            id: f[2],
+            store: f[1],
+            preview: f.length > 4 ? f.sublist(4).join('\t').replaceAll(r'\n', ' ') : '',
+            modified: secs > 0 ? DateTime.fromMillisecondsSinceEpoch(secs * 1000) : null,
+          );
+        }
+      }
+      if (c != null && RegExp(r'^[A-Za-z0-9._-]{4,200}$').hasMatch(c.id)) byId[c.id] = c;
+    }
+    return byId.values.toList();
+  }
+}
+
+/// A slice of a conversation's transcript.
+class TranscriptChunk {
+  const TranscriptChunk(this.text, {required this.size, required this.nextOffset});
+
+  /// Complete JSONL lines read.
+  final String text;
+
+  /// The transcript's size on the server; -1 when it doesn't exist.
+  final int size;
+
+  /// Where the next read should start (after the last complete line).
+  final int nextOffset;
+}
+
 class AgyService {
   AgyService(this.host, this.scripts, this.info);
 
@@ -318,6 +414,35 @@ class AgyService {
       return AgyReport(command, error: e.toString());
     }
     return AgyReport.parse(command, r.stdout);
+  }
+
+  /// Every agy conversation on the server, from the CLI's and the desktop
+  /// app's stores.
+  Future<List<ServerConversation>> listConversations() async {
+    final r = await host.run(scripts.listConversations(), timeout: const Duration(seconds: 45));
+    return ServerConversation.parseList(r.stdout, windows: scripts.isWindows);
+  }
+
+  static final _safeName = RegExp(r'^[A-Za-z0-9._-]{1,200}$');
+
+  /// Reads conversation [id]'s transcript in [store] from byte [offset].
+  Future<TranscriptChunk> readTranscript(String store, String id, int offset,
+      {int maxBytes = 2 * 1024 * 1024}) async {
+    if (!_safeName.hasMatch(store) || !_safeName.hasMatch(id) || store.startsWith('.')) {
+      return TranscriptChunk('', size: -1, nextOffset: offset);
+    }
+    final r = await host.run(scripts.readTranscript(store, id, offset, maxBytes),
+        timeout: const Duration(seconds: 60));
+    final out = r.stdout;
+    final nl = out.indexOf('\n');
+    final head = nl < 0 ? out : out.substring(0, nl);
+    final size = int.tryParse(head.trim().replaceFirst('size=', '')) ?? -1;
+    if (size < 0 || nl < 0) return TranscriptChunk('', size: size, nextOffset: offset);
+    final body = out.substring(nl + 1);
+    // Only whole lines; a line still being written is read next time.
+    final end = body.lastIndexOf('\n');
+    final text = end < 0 ? '' : body.substring(0, end + 1);
+    return TranscriptChunk(text, size: size, nextOffset: offset + utf8.encode(text).length);
   }
 
   /// Custom agents from `agy agents` (names usable with `--agent`).

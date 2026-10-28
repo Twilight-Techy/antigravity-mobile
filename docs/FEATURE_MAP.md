@@ -26,7 +26,9 @@ palette. **Prompt** means it's sent to the agent as a message.
 | `--print-timeout` | ✓ Native: `0s` (wait for the turn). 1.4.9's own default is `0s` too; it is passed explicitly in case an older agy defaults to 5m |
 | Ctrl+C / SIGINT | ✓ Native: Stop. agy ends the turn with status `ERROR` and error `interrupted` (exit 1), which the app shows as cancelled |
 | `--json-schema`, `--disable-slash-commands`, `--log-file` | Not exposed (scripting/CI options) |
-| `/resume`, `/switch`, `/conversation` | Terminal (Agent menu → Other conversations). Chats made in the app are native |
+| Conversation history (`~/.gemini/antigravity-cli/conversation_summaries.db`, transcripts in `brain/<id>/`) | ✓ Native: every agy conversation on the server is in the chat list, grouped by project and marked **CLI** or **Desktop**. Opening one loads its history from agy's transcript; turns taken in the CLI or the desktop app are added when the chat is opened again |
+| Antigravity desktop app on the same machine (store `~/.gemini/antigravity`) | ✓ Native: its conversations are listed too and continued in place with `--app_data_dir=antigravity`, so the desktop app sees the new turns. Server setting **Save new chats to the desktop app** puts new chats there |
+| `/resume`, `/switch`, `/conversation` | Chats made in the app are agy CLI conversations, so `/resume` in the CLI lists them; its "Other" tab imports desktop-app ones. In the app: Terminal (Agent menu → Other conversations) |
 | `/clear`, `/new` | Native: New chat |
 | `/rename` | Native: rename in the chat list, or `/rename <name>` |
 | `/rewind` (`/undo`), `/fork` (`/branch`) | Terminal (Agent menu) |
@@ -70,7 +72,9 @@ palette. **Prompt** means it's sent to the agent as a message.
 
 | agy | App |
 | --- | --- |
-| `step_update` tool steps (`tool_info` parameters/output/error) | ✓ Native: tool cards with input and output. Steps end in `DONE` or `ERROR`; many tools report no `output` (agy keeps it in `brain/<id>/.system_generated/steps/<n>/output.txt`) |
+| `step_update` tool steps (`tool_info` parameters/output/error) | ✓ Native: tool cards with input and output. Steps end in `DONE` or `ERROR`. The stream gives only some arguments and often no output, so the app fills both in from agy's transcript while the reply runs |
+| Thinking | ✓ Native: not in the stream; read from the transcript (`thinking` on each model step) and shown as a collapsed **Thought** block. Agent menu → **Show thinking** hides them |
+| System messages (`/goal` continuations, subagent reports, restart notices) | ✓ Native: collapsed **System** notes |
 | `subagent_info` (role, type, conversation, log) | ✓ Native: subagent cards (`step_type: subagent`) → Open chat / View log. Messaging the subagent with `--conversation <its id>` works; agy replays the subagent's first turn first, which the app drops |
 | `/agents`, Alt+J, Ctrl+K (approve subagent actions) | Terminal (Agent menu → Subagents; key bar ⌥J, ^K) |
 | `/tasks` (background shell tasks) | Terminal (Agent menu → Background tasks) |

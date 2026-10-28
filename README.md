@@ -22,11 +22,20 @@ over SSH.
   once you send the first message, because agy ties a conversation to its
   folder. No-project chats run in a private scratch folder
   (`~/.antigravity-mobile/scratch`), not your whole home directory.
+- **One history with the CLI and the desktop app.** Every agy conversation
+  on the server shows up in the chat list (marked **CLI** or **Desktop**),
+  and any of them can be continued from the phone. Conversations of the
+  Antigravity desktop app on that machine are continued in its own store
+  (`--app_data_dir=antigravity`), so it sees the new turns; chats started
+  here are agy CLI conversations that `/resume` lists.
 - **Agent chat**
   - Each prompt runs `agy -p … --output-format stream-json`, so replies arrive
     as structured events instead of scraped terminal output.
-  - Replies render as markdown with highlighted code, collapsible thinking,
-    and tool-call cards (command, file, search…) showing input and output.
+  - Replies render as markdown with highlighted code, the model's thinking
+    (collapsed, or hidden with **Show thinking**), tool-call cards with full
+    input and output, subagents, artifacts and system notes. Thinking and
+    tool output come from agy's transcript, which the app reads while the
+    reply streams.
   - Follow-ups continue the same agy conversation (`--conversation <id>`).
   - Pickers for model (`agy models`), mode (Default, Plan, Accept edits,
     Full auto, the CLI's version of Turbo), reasoning effort (low to max)
@@ -183,5 +192,9 @@ at `tool/mock_gemini.py`, a scripted stand-in for the Gemini API:
 - Windows servers don't support resuming a reply after a disconnect, or tmux
   persistence.
 - Approval prompts are interactive only in the Terminal tab (see above).
-- Conversations are stored on the phone. The agent's own history lives on the
-  server and is reachable with `/resume` in the Terminal tab.
+- Listing conversations reads agy's SQLite index with `python3`. Without
+  python3 the list still appears (from agy's transcripts) but chats can't be
+  placed in their project folder. Windows servers always use that fallback.
+- Settings such as `modelProvider` are kept per store, so a Gemini API key
+  set up in the app applies to the CLI's store; desktop-app conversations
+  use the desktop app's own sign-in.

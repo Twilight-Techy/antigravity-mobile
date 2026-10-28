@@ -17,6 +17,7 @@ class ServerProfile {
     this.useTmux = true,
     this.notifyOnFinish = true,
     this.ntfyUrl,
+    this.newChatsInDesktopApp = false,
     List<String>? recentWorkspaces,
     AgentOptions? agentOptions,
     this.lastConnectedAt,
@@ -41,6 +42,11 @@ class ServerProfile {
   /// Optional ntfy topic URL (e.g. https://ntfy.sh/agm-…) the server posts
   /// to when a run ends, so a push arrives even if the app was closed.
   String? ntfyUrl;
+
+  /// Save new chats in the Antigravity desktop app's store on this machine
+  /// (`~/.gemini/antigravity`) instead of the CLI's, so the desktop app
+  /// lists them. Either way the CLI can resume them.
+  bool newChatsInDesktopApp;
 
   /// Most recently used first.
   List<String> recentWorkspaces;
@@ -69,6 +75,7 @@ class ServerProfile {
         'useTmux': useTmux,
         'notifyOnFinish': notifyOnFinish,
         if (ntfyUrl != null) 'ntfyUrl': ntfyUrl,
+        'newChatsInDesktopApp': newChatsInDesktopApp,
         'recentWorkspaces': recentWorkspaces,
         'agentOptions': agentOptions.toJson(),
         'lastConnectedAt': lastConnectedAt?.toIso8601String(),
@@ -87,6 +94,7 @@ class ServerProfile {
         useTmux: json['useTmux'] as bool? ?? true,
         notifyOnFinish: json['notifyOnFinish'] as bool? ?? true,
         ntfyUrl: json['ntfyUrl'] as String?,
+        newChatsInDesktopApp: json['newChatsInDesktopApp'] as bool? ?? false,
         recentWorkspaces:
             (json['recentWorkspaces'] as List?)?.cast<String>().toList(),
         agentOptions: json['agentOptions'] is Map

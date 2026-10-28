@@ -155,7 +155,7 @@ extension on WorkspaceHomeState {
     Future<void> inTerminal(String command) async {
       Navigator.pop(context);
       showTab(3);
-      await terminal.runSlashCommand(command, conversationId: convoId);
+      await terminal.runSlashCommand(command, conversationId: convoId, appDataDir: convo.appDataDir);
     }
 
     await showModalBottomSheet<void>(
@@ -179,6 +179,23 @@ extension on WorkspaceHomeState {
                       : 'Panels below open this chat in the interactive terminal.',
                   style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted),
                 ),
+              ),
+              StatefulBuilder(
+                builder: (context, setSheet) {
+                  final chat = this.context.read<ChatController>();
+                  return SwitchListTile(
+                    dense: true,
+                    secondary: const Icon(Icons.psychology_outlined),
+                    title: const Text('Show thinking'),
+                    subtitle: const Text("The model's reasoning, collapsed above each answer",
+                        style: TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
+                    value: chat.showThinking,
+                    onChanged: (v) async {
+                      await chat.setShowThinking(v);
+                      setSheet(() {});
+                    },
+                  );
+                },
               ),
               _item(sheet, Icons.description_outlined, 'Artifacts', 'Plans, task lists and walkthroughs', () {
                 Navigator.pop(sheet);

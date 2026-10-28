@@ -39,6 +39,7 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
   late AuthMethod _auth = widget.profile.authMethod;
   late bool _useTmux = widget.profile.useTmux;
   late bool _notify = widget.profile.notifyOnFinish;
+  late bool _desktopStore = widget.profile.newChatsInDesktopApp;
   late final _ntfy = TextEditingController(text: widget.profile.ntfyUrl ?? '');
   bool _showPassword = false;
   bool _saving = false;
@@ -85,6 +86,7 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
       ..authMethod = _auth
       ..useTmux = _useTmux
       ..notifyOnFinish = _notify
+      ..newChatsInDesktopApp = _desktopStore
       ..ntfyUrl = _ntfy.text.trim().isEmpty ? null : _ntfy.text.trim();
     p.name = _name.text.trim().isEmpty ? p.host : _name.text.trim();
     String? orNull(String s) => s.trim().isEmpty ? null : s;
@@ -235,6 +237,14 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
                           title: const Text('Notify me when the agent finishes'),
                           subtitle: const Text(
                               'While the app is in the background. On iOS the system only allows this for a short while, so see the option below for long tasks.'),
+                        ),
+                        const Divider(height: 1),
+                        SwitchListTile(
+                          value: _desktopStore,
+                          onChanged: (v) => setState(() => _desktopStore = v),
+                          title: const Text('Save new chats to the desktop app'),
+                          subtitle: const Text(
+                              'If this machine runs the Antigravity desktop app, new chats go into its history so it lists them. Otherwise they go to the agy CLI. Chats from either appear here and can be continued anywhere.'),
                         ),
                       ],
                     ),

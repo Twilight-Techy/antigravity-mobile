@@ -47,13 +47,15 @@ class MessageBuilder {
     switch (event) {
       case SessionEvent(:final conversationId):
         if (conversationId != null) this.conversationId = conversationId;
-      case TextDelta(:final text, :final thinking):
+      case UserInputEvent(:final step):
+        message.firstStep ??= step;
+      case TextDelta(:final text, :final thinking, :final step):
         final kind = thinking ? PartKind.thinking : PartKind.text;
         final last = _last;
-        if (last != null && last.kind == kind && _streamingDeltas) {
+        if (last != null && last.kind == kind && _streamingDeltas && last.step == step) {
           last.text += text;
         } else {
-          message.parts.add(MessagePart(kind: kind, text: text));
+          message.parts.add(MessagePart(kind: kind, text: text, step: step));
         }
         _streamingDeltas = true;
       case TextBlock(:final text, :final thinking):
@@ -72,7 +74,7 @@ class MessageBuilder {
           message.parts.add(MessagePart(kind: kind, text: text));
         }
         _streamingDeltas = false;
-      case ToolCallEvent(:final id, :final name, :final input):
+      case ToolCallEvent(:final id, :final name, :final input, :final step):
         _streamingDeltas = false;
         final existing = id == null ? null : _toolById(id);
         if (existing != null) {
@@ -83,6 +85,7 @@ class MessageBuilder {
             toolId: id,
             toolName: name,
             toolInput: input,
+            step: step,
           ));
         }
       case ToolResultEvent(:final id, :final name, :final output, :final isError):
@@ -102,7 +105,7 @@ class MessageBuilder {
           part.toolOutput = output ?? part.toolOutput;
           part.toolStatus = isError ? ToolStatus.failed : ToolStatus.done;
         }
-      case ArtifactEvent(:final name, :final path, :final content):
+      case ArtifactEvent(:final name, :final path, :final content, :final step):
         _streamingDeltas = false;
         final existing = message.parts.where((p) =>
             p.kind == PartKind.artifact && (path != null ? p.toolInput == path : p.toolName == name));
@@ -117,9 +120,10 @@ class MessageBuilder {
             toolInput: path,
             text: content ?? '',
             toolStatus: ToolStatus.done,
+            step: step,
           ));
         }
-      case SubagentEvent(:final subagents):
+      case SubagentEvent(:final subagents, :final step):
         _streamingDeltas = false;
         for (final sub in subagents) {
           final key = sub.conversationId ?? sub.role ?? sub.typeName ?? '';
@@ -136,6 +140,7 @@ class MessageBuilder {
               toolName: sub.role ?? sub.typeName ?? 'Subagent',
               toolInput: json,
               toolStatus: ToolStatus.done,
+              step: step,
             ));
           }
         }

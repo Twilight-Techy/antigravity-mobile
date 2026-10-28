@@ -42,7 +42,24 @@ class FakeHost implements RemoteHost {
     return command.substring(prefix.length, command.length - 1).replaceAll(r"'\''", "'");
   }
 
+  /// agy's conversation index on the "server" (JSON lines as
+  /// listConversations prints them), and transcripts by conversation id.
+  List<String> serverConversations = const [];
+  final Map<String, String> transcripts = {};
+
   CommandResult _answer(String script) {
+    if (script.contains('conversation_summaries')) {
+      return CommandResult(0, serverConversations.map((l) => '$l\n').join(), '');
+    }
+    if (script.contains('transcript_full.jsonl') && script.contains('tail -c +')) {
+      final id = RegExp(r'brain/([^/]+)/').firstMatch(script)!.group(1)!;
+      final offset = int.parse(RegExp(r'tail -c \+(\d+)').firstMatch(script)!.group(1)!) - 1;
+      final t = transcripts[id];
+      if (t == null) return const CommandResult(0, 'size=-1\n', '');
+      final bytes = utf8.encode(t);
+      final rest = offset < bytes.length ? utf8.decode(bytes.sublist(offset)) : '';
+      return CommandResult(0, 'size=${bytes.length}\n$rest', '');
+    }
     if (script.contains('metadata.json')) {
       return const CommandResult(0, '120\t/home/dev/.gemini/antigravity-cli/brain/conv-1/task.md\n', '');
     }

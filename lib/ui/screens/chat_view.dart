@@ -41,7 +41,9 @@ class _ChatViewState extends State<ChatView> {
     return Column(
       children: [
         Expanded(
-          child: messages.isEmpty
+          child: messages.isEmpty && chat.loadingHistory
+              ? const Center(child: CircularProgressIndicator())
+              : messages.isEmpty
               ? _Welcome(onPick: (s) {
                   chat.draft.text = s;
                   chat.draft.selection = TextSelection.collapsed(offset: s.length);
@@ -59,6 +61,7 @@ class _ChatViewState extends State<ChatView> {
                           ? UserBubble(message: m)
                           : AgentMessageView(
                               message: m,
+                              showThinking: chat.showThinking,
                               onCancel: chat.busy ? chat.cancel : null,
                               onResume: chat.resumePending,
                               onViewChanges: () => WorkspaceHomeState.of(context)?.showTab(2),
@@ -232,7 +235,8 @@ class _ComposerState extends State<_Composer> {
   Future<void> _runInTerminal(String text) async {
     final terminal = context.read<TerminalSession>();
     WorkspaceHomeState.of(context)?.showTab(3);
-    await terminal.runSlashCommand(text, conversationId: context.read<ChatController>().current?.agyConversationId);
+    final c = context.read<ChatController>().current;
+    await terminal.runSlashCommand(text, conversationId: c?.agyConversationId, appDataDir: c?.appDataDir);
   }
 
   Future<void> _slashSheet() async {

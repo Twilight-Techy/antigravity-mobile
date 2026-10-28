@@ -14,9 +14,18 @@ class SessionEvent extends AgentEvent {
 
 /// Incremental text appended to the current block.
 class TextDelta extends AgentEvent {
-  const TextDelta(this.text, {this.thinking = false});
+  const TextDelta(this.text, {this.thinking = false, this.step});
   final String text;
   final bool thinking;
+
+  /// agy step the text belongs to (`step_update.step_index`).
+  final int? step;
+}
+
+/// The run's own prompt, at agy step [step]; later steps are its reply.
+class UserInputEvent extends AgentEvent {
+  const UserInputEvent(this.step);
+  final int step;
 }
 
 /// A complete text block (a whole message rather than a delta).
@@ -27,10 +36,11 @@ class TextBlock extends AgentEvent {
 }
 
 class ToolCallEvent extends AgentEvent {
-  const ToolCallEvent({this.id, required this.name, this.input});
+  const ToolCallEvent({this.id, required this.name, this.input, this.step});
   final String? id;
   final String name;
   final String? input;
+  final int? step;
 }
 
 class ToolResultEvent extends AgentEvent {
@@ -43,10 +53,11 @@ class ToolResultEvent extends AgentEvent {
 
 /// An artifact (plan, task list, walkthrough…) the agent created or updated.
 class ArtifactEvent extends AgentEvent {
-  const ArtifactEvent({required this.name, this.path, this.content});
+  const ArtifactEvent({required this.name, this.path, this.content, this.step});
   final String name;
   final String? path;
   final String? content;
+  final int? step;
 }
 
 class ErrorEvent extends AgentEvent {
@@ -96,8 +107,9 @@ class ResultEvent extends AgentEvent {
 
 /// Subagents the agent started (from `step_update.subagent_info`).
 class SubagentEvent extends AgentEvent {
-  const SubagentEvent(this.subagents);
+  const SubagentEvent(this.subagents, {this.step});
   final List<SubagentInfo> subagents;
+  final int? step;
 }
 
 class SubagentInfo {
@@ -375,13 +387,14 @@ class AgentStreamParser {
     final stepType = _str(m['step_type'])?.toLowerCase() ?? '';
     final state = _str(m['state'])?.toUpperCase() ?? '';
     final ended = state == 'DONE' || state == 'ERROR';
-    final id = 'step-${m['step_index'] ?? ''}';
+    final index = m['step_index'] is num ? (m['step_index'] as num).toInt() : null;
+    final id = 'step-${index ?? ''}';
     final firstStep = !_sawStep;
     _sawStep = true;
     if (stepType == 'user_input') {
       _sawUserInput = true;
       _heldBack.clear();
-      return session;
+      return [...session, if (index != null) UserInputEvent(index)];
     }
     if (firstStep && !_sawUserInput && stepType != 'system_message') {
       // A normal run starts with its user_input; anything else first is a
@@ -391,12 +404,12 @@ class AgentStreamParser {
     switch (stepType) {
       case 'agent_response':
         final delta = _str(m['text_delta']);
-        if (delta != null && delta.isNotEmpty) events.add(TextDelta(delta));
+        if (delta != null && delta.isNotEmpty) events.add(TextDelta(delta, step: index));
       case 'tool':
         final info = m['tool_info'] is Map ? Map<String, dynamic>.from(m['tool_info'] as Map) : const <String, dynamic>{};
         final name = _str(info['name'] ?? m['tool_name']) ?? 'tool';
         final params = info['parameters'];
-        events.add(ToolCallEvent(id: id, name: name, input: _pretty(params)));
+        events.add(ToolCallEvent(id: id, name: name, input: _pretty(params), step: index));
         if (ended) {
           final error = info['error'];
           events.add(ToolResultEvent(
@@ -406,7 +419,7 @@ class AgentStreamParser {
             isError: error != null || state == 'ERROR',
           ));
           if (state == 'DONE') {
-            final artifact = _artifactFromTool(name, params);
+            final artifact = artifactFromTool(name, params, index);
             if (artifact != null) events.add(artifact);
           }
         }
@@ -420,7 +433,7 @@ class AgentStreamParser {
           .whereType<Map>()
           .map((e) => SubagentInfo.fromJson(Map<String, dynamic>.from(e)))
           .toList();
-      if (list.isNotEmpty) events.add(SubagentEvent(list));
+      if (list.isNotEmpty) events.add(SubagentEvent(list, step: index));
     }
     if (!_sawUserInput) {
       _heldBack.addAll(events);
@@ -439,11 +452,11 @@ class AgentStreamParser {
 
   /// Files written to agy's artifact directory
   /// (`<appDataDir>/brain/<conversation-id>/`) are artifacts.
-  ArtifactEvent? _artifactFromTool(String name, Object? params) {
+  static ArtifactEvent? artifactFromTool(String name, Object? params, [int? step]) {
     if (!_fileWriteTools.contains(name) || params is! Map) return null;
     final path = _str(params['Path'] ?? params['TargetFile'] ?? params['path'] ?? params['file_path']);
     if (path == null || !isArtifactPath(path)) return null;
-    return ArtifactEvent(name: path.split(RegExp(r'[\\/]')).last, path: path);
+    return ArtifactEvent(name: path.split(RegExp(r'[\\/]')).last, path: path, step: step);
   }
 
   /// Whether [path] is a user-facing file in an agy artifact directory, not

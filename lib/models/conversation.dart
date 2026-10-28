@@ -6,6 +6,10 @@ enum PartKind { text, thinking, tool, error, notice, artifact, subagent }
 
 enum ToolStatus { running, done, failed }
 
+/// Where a conversation was started: in this app, in the agy CLI on the
+/// server, or in the Antigravity desktop app on that machine.
+enum ChatOrigin { app, cli, desktop }
+
 /// One renderable block inside an agent reply.
 class MessagePart {
   MessagePart({
@@ -16,9 +20,14 @@ class MessagePart {
     this.toolInput,
     this.toolOutput,
     this.toolStatus = ToolStatus.running,
+    this.step,
   });
 
   final PartKind kind;
+
+  /// agy's step index this part came from, used to merge the live stream
+  /// with agy's transcript (which adds thinking and tool output).
+  int? step;
   String text;
 
   // Tool-call fields (kind == tool). Artifacts (kind == artifact) use
@@ -40,6 +49,7 @@ class MessagePart {
         if (toolInput != null) 'toolInput': toolInput,
         if (toolOutput != null) 'toolOutput': toolOutput,
         'toolStatus': toolStatus.name,
+        if (step != null) 'step': step,
       };
 
   factory MessagePart.fromJson(Map<String, dynamic> json) => MessagePart(
@@ -53,6 +63,7 @@ class MessagePart {
         toolStatus: ToolStatus.values.firstWhere(
             (s) => s.name == json['toolStatus'],
             orElse: () => ToolStatus.done),
+        step: json['step'] as int?,
       );
 }
 
@@ -66,6 +77,7 @@ class ChatMessage {
     this.runId,
     this.runOffset = 0,
     this.usage,
+    this.firstStep,
     List<String>? rawLines,
   })  : parts = parts ?? [],
         rawLines = rawLines ?? [];
@@ -85,6 +97,10 @@ class ChatMessage {
 
   /// Token usage summary reported by agy, if any.
   String? usage;
+
+  /// For a reply: agy's step index of the prompt that started it, so steps
+  /// after it in agy's transcript belong to this reply.
+  int? firstStep;
 
   /// Raw output lines, kept for the "view raw output" debug sheet.
   final List<String> rawLines;
@@ -114,6 +130,7 @@ class ChatMessage {
         if (runId != null) 'runId': runId,
         'runOffset': runOffset,
         if (usage != null) 'usage': usage,
+        if (firstStep != null) 'firstStep': firstStep,
         'rawLines': rawLines.length > 100
             ? rawLines.sublist(rawLines.length - 100)
             : rawLines,
@@ -135,6 +152,7 @@ class ChatMessage {
         runId: json['runId'] as String?,
         runOffset: json['runOffset'] as int? ?? 0,
         usage: json['usage'] as String?,
+        firstStep: json['firstStep'] as int?,
         rawLines: (json['rawLines'] as List?)?.cast<String>().toList(),
       );
 }
@@ -153,6 +171,11 @@ class Conversation {
     DateTime? updatedAt,
     this.agyConversationId,
     this.parentId,
+    this.appDataDir,
+    this.origin = ChatOrigin.app,
+    this.syncedStep = -1,
+    this.transcriptOffset = 0,
+    this.serverPreview,
     List<String>? extraDirs,
     List<ChatMessage>? messages,
   })  : updatedAt = updatedAt ?? createdAt,
@@ -172,6 +195,22 @@ class Conversation {
   /// Set for a chat opened on a subagent: the chat that started it.
   final String? parentId;
 
+  /// agy's data folder under `~/.gemini` holding this conversation:
+  /// null for the CLI's own (`antigravity-cli`), `antigravity` for the
+  /// desktop app's. Passed to agy as `--app_data_dir`.
+  String? appDataDir;
+
+  /// Where the conversation was started.
+  final ChatOrigin origin;
+
+  /// Last agy step shown here, and how much of agy's transcript was read,
+  /// so turns taken in the CLI or the desktop app can be added later.
+  int syncedStep;
+  int transcriptOffset;
+
+  /// agy's own preview of a conversation not opened here yet.
+  String? serverPreview;
+
   /// More folders the agent may use (`--add-dir`), like a multi-folder
   /// Antigravity project.
   final List<String> extraDirs;
@@ -187,6 +226,11 @@ class Conversation {
         'updatedAt': updatedAt.toIso8601String(),
         if (agyConversationId != null) 'agyConversationId': agyConversationId,
         if (parentId != null) 'parentId': parentId,
+        if (appDataDir != null) 'appDataDir': appDataDir,
+        'origin': origin.name,
+        'syncedStep': syncedStep,
+        'transcriptOffset': transcriptOffset,
+        if (serverPreview != null) 'serverPreview': serverPreview,
         if (extraDirs.isNotEmpty) 'extraDirs': extraDirs,
         'messages': messages.map((m) => m.toJson()).toList(),
       };
@@ -201,6 +245,11 @@ class Conversation {
         updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
         agyConversationId: json['agyConversationId'] as String?,
         parentId: json['parentId'] as String?,
+        appDataDir: json['appDataDir'] as String?,
+        origin: ChatOrigin.values.firstWhere((o) => o.name == json['origin'], orElse: () => ChatOrigin.app),
+        syncedStep: json['syncedStep'] as int? ?? -1,
+        transcriptOffset: json['transcriptOffset'] as int? ?? 0,
+        serverPreview: json['serverPreview'] as String?,
         extraDirs: (json['extraDirs'] as List?)?.whereType<String>().toList(),
         messages: (json['messages'] as List? ?? [])
             .map((m) => ChatMessage.fromJson(Map<String, dynamic>.from(m)))

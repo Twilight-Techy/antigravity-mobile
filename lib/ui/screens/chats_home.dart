@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/conversation.dart';
 import '../../services/storage_service.dart';
 import '../../state/chat_controller.dart';
 import '../../state/chat_groups.dart';
@@ -27,7 +28,14 @@ class _ChatsHomeState extends State<ChatsHome> {
   @override
   void initState() {
     super.initState();
-    context.read<ChatController>().load();
+    final chat = context.read<ChatController>();
+    chat.load().then((_) => chat.syncWithServer());
+  }
+
+  Future<void> _refresh() async {
+    final chat = context.read<ChatController>();
+    await chat.load();
+    await chat.syncWithServer();
   }
 
   Future<void> _open(ConversationSummary c) async {
@@ -75,14 +83,16 @@ class _ChatsHomeState extends State<ChatsHome> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete chat?'),
-        content: Text('"${c.title}" is removed from this phone. Files on the server are not changed.'),
+        title: const Text('Remove chat?'),
+        content: Text(c.agyConversationId == null
+            ? '"${c.title}" is removed from this phone. Files on the server are not changed.'
+            : '"${c.title}" is removed from this list. agy keeps the conversation on the server, so it can still be resumed in the CLI (/resume) or the desktop app.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: AppColors.danger),
-            child: const Text('Delete'),
+            child: const Text('Remove'),
           ),
         ],
       ),
@@ -130,6 +140,7 @@ class _ChatsHomeState extends State<ChatsHome> {
       body: Column(
         children: [
           if (!session.isConnected) const ConnectionBanner(),
+          if (chat.syncing) const LinearProgressIndicator(minHeight: 2),
           Expanded(
             child: groups.isEmpty
                 ? EmptyState(
@@ -155,7 +166,7 @@ class _ChatsHomeState extends State<ChatsHome> {
                     ),
                   )
                 : RefreshIndicator(
-                    onRefresh: chat.load,
+                    onRefresh: _refresh,
                     child: ListView(
                       padding: const EdgeInsets.only(bottom: 96),
                       children: [
@@ -225,7 +236,17 @@ class _ChatsHomeState extends State<ChatsHome> {
     return ListTile(
       contentPadding: const EdgeInsets.only(left: 56, right: 4),
       dense: true,
-      title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14.5)),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14.5)),
+          ),
+          if (c.origin != ChatOrigin.app) ...[
+            const SizedBox(width: 6),
+            OriginBadge(c.origin),
+          ],
+        ],
+      ),
       subtitle: Text(
         running ? 'Agent working…' : (c.preview.isEmpty ? timeAgo(c.updatedAt) : '${timeAgo(c.updatedAt)} · ${c.preview}'),
         maxLines: 1,
@@ -245,11 +266,30 @@ class _ChatsHomeState extends State<ChatsHome> {
         },
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'rename', child: Text('Rename')),
-          PopupMenuItem(value: 'delete', enabled: !running, child: const Text('Delete')),
+          PopupMenuItem(value: 'delete', enabled: !running, child: const Text('Remove')),
         ],
       ),
     );
   }
+}
+
+/// Marks a chat started in the agy CLI or the Antigravity desktop app.
+class OriginBadge extends StatelessWidget {
+  const OriginBadge(this.origin, {super.key});
+  final ChatOrigin origin;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Text(
+          origin == ChatOrigin.desktop ? 'Desktop' : 'CLI',
+          style: const TextStyle(fontSize: 10.5, color: AppColors.textMuted),
+        ),
+      );
 }
 
 class _Label extends StatelessWidget {
