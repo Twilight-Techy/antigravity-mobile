@@ -56,8 +56,6 @@ class TerminalSession extends ChangeNotifier {
 
   /// Recently seen URLs, e.g. the Google sign-in link, newest first.
   final List<String> urls = [];
-  final _ansi = RegExp(r'\x1B(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(\x07|\x1B\\)|[()][0-9A-Za-z]|[=>78])');
-  final _url = RegExp(r'https?://[^\s"<>\x00-\x1F]+');
   String _urlTail = '';
 
   /// agy conversation the terminal was opened on, if any.
@@ -142,20 +140,47 @@ class TerminalSession extends ChangeNotifier {
   void _onTerminalInput(String data) => _pty?.write(utf8.encode(data));
 
   void _scanUrls(String data) {
-    final clean = (_urlTail + data).replaceAll(_ansi, '');
-    _urlTail = clean.length > 300 ? clean.substring(clean.length - 300) : clean;
+    // Kept raw: an OSC 8 hyperlink can span chunks, and it is the only
+    // place a long URL (agy's sign-in link) arrives unbroken when the TUI
+    // wraps the visible text at the terminal's width.
+    final raw = _urlTail + data;
+    _urlTail = raw.length > 4096 ? raw.substring(raw.length - 4096) : raw;
     var changed = false;
-    for (final m in _url.allMatches(clean)) {
-      var url = m.group(0)!;
-      url = url.replaceAll(RegExp(r'[.,;:)\]]+$'), '');
-      if (url.length < 12) continue;
-      // A longer version of a URL we saw truncated at a chunk boundary.
-      urls.removeWhere((u) => url.startsWith(u) || u == url);
+    for (final url in findUrls(raw)) {
+      // A cut-off copy of a link we already have (wrapped or split text).
+      if (urls.any((u) => u.length > url.length && u.startsWith(url))) continue;
+      urls.removeWhere((u) => url.startsWith(u));
       urls.insert(0, url);
       changed = true;
     }
     if (urls.length > 5) urls.removeRange(5, urls.length);
     if (changed) _notify();
+  }
+
+  static final _osc8 = RegExp(r'\x1B\]8;[^;\x07\x1B]*;([^\x07\x1B]+)(?:\x07|\x1B\\)');
+  static final _ansi = RegExp(r'\x1B(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(\x07|\x1B\\)|[()][0-9A-Za-z]|[=>78])');
+  static final _url = RegExp(r'https?://[^\s"<>\x00-\x1F]+');
+
+  /// Links in raw terminal output: OSC 8 hyperlink targets first (complete
+  /// even when the visible text is wrapped), then URLs in the visible text.
+  static List<String> findUrls(String raw) {
+    final found = <String>[];
+    void add(String url) {
+      url = url.replaceAll(RegExp(r'[.,;:)\]]+$'), '');
+      if (url.length < 12 || !url.startsWith(RegExp('https?://'))) return;
+      if (found.any((u) => u.startsWith(url))) return;
+      found
+        ..removeWhere((u) => url.startsWith(u))
+        ..add(url);
+    }
+
+    for (final m in _osc8.allMatches(raw)) {
+      add(m.group(1)!);
+    }
+    for (final m in _url.allMatches(raw.replaceAll(_ansi, ''))) {
+      add(m.group(0)!);
+    }
+    return found;
   }
 
   void dismissUrls() {
