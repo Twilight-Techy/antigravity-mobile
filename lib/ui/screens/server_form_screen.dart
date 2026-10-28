@@ -249,7 +249,7 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
                       labelText: 'Push via ntfy (optional)',
                       hintText: 'https://ntfy.sh/your-topic',
                       helperText:
-                          'The server posts here when a task ends, so you get a push even if the app is closed. Subscribe to the topic in the ntfy app. Only the workspace name is sent.',
+                          'The server posts here when a task ends, so you get a push even if the app is closed. Subscribe to the topic in the ntfy app. Only the workspace name is sent. Skipped automatically on phones that get built-in push notifications.',
                       helperMaxLines: 4,
                       suffixIcon: IconButton(
                         tooltip: 'Generate a private topic',

@@ -183,7 +183,9 @@ class ChatController extends ChangeNotifier {
       ...options.toArgs(),
       if (convo.agyConversationId != null) ...['--conversation', convo.agyConversationId!],
     ];
-    final ntfy = session.profile.ntfyUrl;
+    // With FCM registered this phone already gets a push from the relay,
+    // so skip ntfy to avoid a second notification.
+    final ntfy = session.pushRegistered ? null : session.profile.ntfyUrl;
     final run = agy.createRun(
       runId: reply.runId!,
       cwd: convo.workspace,

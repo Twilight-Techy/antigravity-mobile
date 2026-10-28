@@ -305,7 +305,7 @@ void main() {
   testWidgets('registers for relay pushes and skips duplicate local notifications', (tester) async {
     final notifier = SilentNotifier();
     final push = NoPushService(fakeRegistration: const PushRegistration('https://relay.example.dev', 'k-123'));
-    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
+    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project'], ntfyUrl: 'https://ntfy.sh/agm-topic');
     await storage.saveProfiles([profile]);
     await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
     await storage.trustHostKey('h:22', 'SHA256:abc123');
@@ -335,6 +335,7 @@ void main() {
     final start = host.commands.lastWhere((c) => c.contains('started='));
     expect(start, contains('/send'));
     expect(start, contains('antigravity://open?server=p1'));
+    expect(start, isNot(contains('ntfy.sh')), reason: 'no second notification via ntfy');
   });
 
   testWidgets('rejecting the host key does not connect', (tester) async {
