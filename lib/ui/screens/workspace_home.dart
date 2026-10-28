@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/conversation.dart';
 import '../../state/chat_controller.dart';
 import '../../state/session_state.dart';
 import '../../state/terminal_session.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
+import 'artifacts_screen.dart';
 import 'changes_view.dart';
 import 'chat_view.dart';
 import 'files_view.dart';
@@ -91,6 +93,11 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
             ],
           ),
           actions: [
+            IconButton(
+              tooltip: 'Agent',
+              onPressed: () => _agentMenu(context, convo),
+              icon: const Icon(Icons.hub_outlined),
+            ),
             if (_tab == 0)
               IconButton(
                 tooltip: 'New chat',
@@ -132,6 +139,75 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
       ),
     );
   }
+}
+
+extension on WorkspaceHomeState {
+  /// Artifacts, plus the agy panels that only exist in the interactive TUI,
+  /// opened on this chat's own conversation so its subagents, background
+  /// tasks and context are the ones shown.
+  Future<void> _agentMenu(BuildContext context, Conversation convo) async {
+    final terminal = context.read<TerminalSession>();
+    final convoId = convo.agyConversationId;
+    Future<void> inTerminal(String command) async {
+      Navigator.pop(context);
+      showTab(3);
+      await terminal.runSlashCommand(command, conversationId: convoId);
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(sheet).height * 0.8),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+                child: Text('Agent', style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  convoId == null
+                      ? 'Send a message first to give this chat an agy conversation.'
+                      : 'Panels below open this chat in the interactive terminal.',
+                  style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted),
+                ),
+              ),
+              _item(sheet, Icons.description_outlined, 'Artifacts', 'Plans, task lists and walkthroughs', () {
+                Navigator.pop(sheet);
+                final session = context.read<SessionState>();
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => ArtifactsScreen(conversation: convo, session: session)));
+              }),
+              _item(sheet, Icons.account_tree_outlined, 'Subagents', 'See subagents and message them (/agents)',
+                  () => inTerminal('/agents')),
+              _item(sheet, Icons.pending_actions_outlined, 'Background tasks', 'Monitor and stop shell tasks (/tasks)',
+                  () => inTerminal('/tasks')),
+              _item(sheet, Icons.terminal, 'Continue in terminal', 'This chat in the full agy interface',
+                  () => inTerminal('')),
+              _item(sheet, Icons.data_usage, 'Usage & quota', 'Model quota usage (/usage)', () => inTerminal('/usage')),
+              _item(sheet, Icons.donut_large, 'Context window', 'How full the context is (/context)',
+                  () => inTerminal('/context')),
+              _item(sheet, Icons.rule, 'Permissions', 'Allow rules for tools (/permissions)',
+                  () => inTerminal('/permissions')),
+              _item(sheet, Icons.extension_outlined, 'MCP servers', 'Manage MCP servers (/mcp)', () => inTerminal('/mcp')),
+              _item(sheet, Icons.tune, 'agy settings', 'Settings editor (/config)', () => inTerminal('/config')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _item(BuildContext context, IconData icon, String title, String subtitle, VoidCallback onTap) => ListTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted)),
+        onTap: onTap,
+      );
 }
 
 /// Server setup and disconnect, shared by the chat list and chat screens.

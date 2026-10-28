@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../models/conversation.dart';
 import '../theme/app_theme.dart';
 import 'common.dart';
+import '../screens/artifacts_screen.dart';
 import 'markdown_view.dart';
 
 class UserBubble extends StatelessWidget {
@@ -48,11 +49,15 @@ class AgentMessageView extends StatelessWidget {
     required this.message,
     this.onCancel,
     this.onResume,
+    this.onViewChanges,
   });
 
   final ChatMessage message;
   final VoidCallback? onCancel;
   final VoidCallback? onResume;
+
+  /// Shown on replies where the agent edited files.
+  final VoidCallback? onViewChanges;
 
   @override
   Widget build(BuildContext context) {
@@ -93,7 +98,7 @@ class AgentMessageView extends StatelessWidget {
           ),
         if (message.status == MessageStatus.cancelled)
           const _InlineNotice(icon: Icons.stop_circle_outlined, text: 'Stopped.'),
-        if (!active) _Footer(message: message),
+        if (!active) _Footer(message: message, onViewChanges: madeChanges(message) ? onViewChanges : null),
         if (active && onCancel != null)
           Padding(
             padding: const EdgeInsets.only(top: 2),
@@ -189,6 +194,8 @@ class _PartView extends StatelessWidget {
             ],
           ),
         );
+      case PartKind.artifact:
+        return _ArtifactCard(part: part);
       case PartKind.notice:
         return _Collapsible(
           icon: Icons.notes,
@@ -431,9 +438,58 @@ class _InlineNotice extends StatelessWidget {
   }
 }
 
+/// Whether the agent edited, created or deleted files in this reply.
+bool madeChanges(ChatMessage m) => m.parts.any((p) =>
+    p.kind == PartKind.tool &&
+    p.toolStatus != ToolStatus.failed &&
+    RegExp(r'write|edit|replace|patch|create|delete|remove|move|rename|apply', caseSensitive: false)
+        .hasMatch(p.toolName ?? ''));
+
+class _ArtifactCard extends StatelessWidget {
+  const _ArtifactCard({required this.part});
+  final MessagePart part;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = part.toolName ?? 'Artifact';
+    return Material(
+      color: AppColors.accentAlt.withValues(alpha: 0.08),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: AppColors.accentAlt.withValues(alpha: 0.35)),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => openArtifact(
+            context, ArtifactRef(name: name, path: part.toolInput, content: part.text.isEmpty ? null : part.text)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.description_outlined, size: 20, color: AppColors.accentAlt),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+                    const Text('Artifact · tap to open', style: TextStyle(fontSize: 11.5, color: AppColors.textMuted)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: AppColors.textFaint),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Footer extends StatelessWidget {
-  const _Footer({required this.message});
+  const _Footer({required this.message, this.onViewChanges});
   final ChatMessage message;
+  final VoidCallback? onViewChanges;
 
   void _raw(BuildContext context) {
     showModalBottomSheet(
@@ -471,8 +527,21 @@ class _Footer extends StatelessWidget {
     final text = message.plainText;
     return Row(
       children: [
+        if (onViewChanges != null)
+          TextButton.icon(
+            onPressed: onViewChanges,
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+            icon: const Icon(Icons.difference_outlined, size: 16),
+            label: const Text('View changes'),
+          ),
         if (message.usage != null)
-          Text(message.usage!, style: const TextStyle(fontSize: 11.5, color: AppColors.textFaint)),
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Text(message.usage!,
+                  overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, color: AppColors.textFaint)),
+            ),
+          ),
         const Spacer(),
         if (text.isNotEmpty)
           IconButton(

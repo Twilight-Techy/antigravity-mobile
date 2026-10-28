@@ -41,6 +41,14 @@ class ToolResultEvent extends AgentEvent {
   final bool isError;
 }
 
+/// An artifact (plan, task list, walkthrough…) the agent created or updated.
+class ArtifactEvent extends AgentEvent {
+  const ArtifactEvent({required this.name, this.path, this.content});
+  final String name;
+  final String? path;
+  final String? content;
+}
+
 class ErrorEvent extends AgentEvent {
   const ErrorEvent(this.message);
   final String message;
@@ -132,6 +140,21 @@ class AgentStreamParser {
     if (t.contains('error') || (type.isEmpty && m['error'] != null)) {
       events.add(ErrorEvent(_errorText(m['error'] ?? m['message'] ?? m)));
       return events;
+    }
+
+    if (t.contains('artifact')) {
+      final a = m['artifact'] is Map ? Map<String, dynamic>.from(m['artifact'] as Map) : m;
+      final path = _str(a['path'] ?? a['file_path'] ?? a['filePath'] ?? a['uri']);
+      final name = _str(a['name'] ?? a['title'] ?? a['filename'] ?? a['file_name']) ??
+          path?.split(RegExp(r'[\\/]')).last;
+      if (name != null || path != null) {
+        events.add(ArtifactEvent(
+          name: name ?? 'Artifact',
+          path: path,
+          content: _textOf(a['content'] ?? a['markdown'] ?? a['text'] ?? a['body']),
+        ));
+        return events;
+      }
     }
 
     final isTool = t.contains('tool') || t.contains('function');

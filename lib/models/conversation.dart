@@ -2,7 +2,7 @@ enum MessageRole { user, agent }
 
 enum MessageStatus { pending, streaming, done, error, cancelled, interrupted }
 
-enum PartKind { text, thinking, tool, error, notice }
+enum PartKind { text, thinking, tool, error, notice, artifact }
 
 enum ToolStatus { running, done, failed }
 
@@ -21,7 +21,9 @@ class MessagePart {
   final PartKind kind;
   String text;
 
-  // Tool-call fields (kind == tool).
+  // Tool-call fields (kind == tool). Artifacts (kind == artifact) use
+  // [toolName] for the artifact name, [toolInput] for its path on the
+  // server and [text] for its content when the agent sent it inline.
   String? toolId;
   String? toolName;
   String? toolInput;

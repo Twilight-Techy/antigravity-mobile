@@ -379,6 +379,23 @@ class AgyService {
     return FileContent(path: path, size: size, bytes: base64.decode(b64));
   }
 
+  /// Artifact files agy saved for a conversation, newest name order.
+  Future<List<DirEntry>> findArtifacts(String conversationId) async {
+    if (!RegExp(r'^[A-Za-z0-9._-]{4,200}$').hasMatch(conversationId)) return const [];
+    final r = await host.run(scripts.findArtifacts(conversationId), timeout: const Duration(seconds: 30));
+    final out = <DirEntry>[];
+    for (final line in const LineSplitter().convert(r.stdout)) {
+      final i = line.indexOf('\t');
+      if (i <= 0) continue;
+      final path = line.substring(i + 1).trim();
+      if (path.isEmpty) continue;
+      final name = path.split(RegExp(r'[\\/]')).last;
+      out.add(DirEntry(name: name, path: path, isDir: false, size: int.tryParse(line.substring(0, i)) ?? 0));
+    }
+    out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return out;
+  }
+
   Future<String> makeDir(String path) async {
     final r = await host.run(scripts.makeDir(path));
     if (!r.ok) throw RemoteCommandException('Could not create $path', r);

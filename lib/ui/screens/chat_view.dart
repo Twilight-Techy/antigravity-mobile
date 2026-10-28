@@ -57,6 +57,7 @@ class _ChatViewState extends State<ChatView> {
                               message: m,
                               onCancel: chat.busy ? chat.cancel : null,
                               onResume: chat.resumePending,
+                              onViewChanges: () => WorkspaceHomeState.of(context)?.showTab(2),
                             ),
                     );
                   },
@@ -193,7 +194,7 @@ class _ComposerState extends State<_Composer> {
   Future<void> _runInTerminal(String text) async {
     final terminal = context.read<TerminalSession>();
     WorkspaceHomeState.of(context)?.showTab(3);
-    await terminal.runSlashCommand(text);
+    await terminal.runSlashCommand(text, conversationId: context.read<ChatController>().current?.agyConversationId);
   }
 
   Future<void> _slashSheet() async {
@@ -286,6 +287,16 @@ class _ComposerState extends State<_Composer> {
                     label: opts.permissionMode.label,
                     highlight: opts.permissionMode == PermissionMode.fullAuto,
                     onTap: () => showModePicker(context),
+                  ),
+                  const SizedBox(width: 6),
+                  _OptionChip(
+                    key: const Key('fast-chip'),
+                    icon: opts.fast ? Icons.fast_forward_rounded : Icons.fast_forward_outlined,
+                    label: opts.fast ? 'Fast: on' : 'Fast: off',
+                    highlight: opts.fast,
+                    locked: true,
+                    // Fast skips planning for quick actions (agy's /fast).
+                    onTap: () => chat.setOptions(opts.copyWith(fast: !opts.fast)),
                   ),
                   const SizedBox(width: 6),
                   _OptionChip(

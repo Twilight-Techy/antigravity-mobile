@@ -118,4 +118,23 @@ void main() {
     ], success: false);
     expect(m.parts.single.kind, PartKind.error);
   });
+
+  test('artifact events become artifact parts, updated in place', () {
+    final m = _build([
+      {'type': 'artifact', 'name': 'implementation_plan.md', 'path': '/home/u/.gemini/x/implementation_plan.md'},
+      {'type': 'text_delta', 'delta': 'Plan ready.'},
+      {
+        'type': 'artifact_updated',
+        'artifact': {'path': '/home/u/.gemini/x/implementation_plan.md', 'content': '# Plan'}
+      },
+      {'type': 'artifact', 'title': 'Walkthrough', 'markdown': 'Steps'},
+    ]);
+    final arts = m.parts.where((p) => p.kind == PartKind.artifact).toList();
+    expect(arts, hasLength(2));
+    expect(arts[0].toolName, 'implementation_plan.md');
+    expect(arts[0].text, '# Plan');
+    expect(arts[1].toolName, 'Walkthrough');
+    expect(arts[1].text, 'Steps');
+    expect(m.plainText, 'Plan ready.');
+  });
 }

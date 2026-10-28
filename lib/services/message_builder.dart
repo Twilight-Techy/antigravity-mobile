@@ -74,6 +74,23 @@ class MessageBuilder {
           part.toolOutput = output ?? part.toolOutput;
           part.toolStatus = isError ? ToolStatus.failed : ToolStatus.done;
         }
+      case ArtifactEvent(:final name, :final path, :final content):
+        _streamingDeltas = false;
+        final existing = message.parts.where((p) =>
+            p.kind == PartKind.artifact && (path != null ? p.toolInput == path : p.toolName == name));
+        if (existing.isNotEmpty) {
+          final p = existing.last;
+          if (content != null) p.text = content;
+          p.toolInput = path ?? p.toolInput;
+        } else {
+          message.parts.add(MessagePart(
+            kind: PartKind.artifact,
+            toolName: name,
+            toolInput: path,
+            text: content ?? '',
+            toolStatus: ToolStatus.done,
+          ));
+        }
       case ErrorEvent(:final message):
         _streamingDeltas = false;
         this.message.parts.add(MessagePart(kind: PartKind.error, text: message));

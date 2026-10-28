@@ -222,6 +222,21 @@ and a second line ✓''';
     expect(log, isNot(contains(' hi ')), reason: 'the prompt is never sent');
   }, skip: skip);
 
+  test('finds artifacts saved for a conversation', () async {
+    await host.run("sh -c 'D=\$HOME/.gemini/antigravity/brain/conv-art-1; mkdir -p \$D/sub; "
+        "printf \"# Plan\\n\" > \$D/implementation_plan.md; printf x > \$D/task.md; printf y > \$D/sub/notes.txt; "
+        "printf z > \$D/image.png; mkdir -p \$HOME/.gemini/other; printf q > \$HOME/.gemini/other/unrelated.md'");
+    addTearDown(() => host.run("sh -c 'rm -rf \$HOME/.gemini/antigravity \$HOME/.gemini/other'"));
+
+    final found = await agy.findArtifacts('conv-art-1');
+    expect(found.map((f) => f.name), ['implementation_plan.md', 'notes.txt', 'task.md']);
+    expect(found.first.path, endsWith('/.gemini/antigravity/brain/conv-art-1/implementation_plan.md'));
+    expect(found.first.size, 7);
+    expect((await agy.readFile(found.first.path)).text, '# Plan\n');
+    expect(await agy.findArtifacts('nope-404'), isEmpty);
+    expect(await agy.findArtifacts("x'; rm -rf ~"), isEmpty, reason: 'unsafe ids are rejected');
+  }, skip: skip);
+
   test('stores the API key via stdin in a private file', () async {
     await agy.setApiKey('AIza-test_key.123');
     final r = await host.run(

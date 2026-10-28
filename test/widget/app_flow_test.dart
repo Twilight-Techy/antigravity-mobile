@@ -377,6 +377,81 @@ void main() {
     expect(start, isNot(contains('ntfy.sh')), reason: 'no second notification via ntfy');
   });
 
+  testWidgets('fast mode, artifacts, view changes and the agent menu', (tester) async {
+    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
+    await storage.saveProfiles([profile]);
+    await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
+    await storage.trustHostKey('h:22', 'SHA256:abc123');
+    host.agentOutput = (_) => [
+          jsonEncode({'type': 'system', 'subtype': 'init', 'conversation_id': 'conv-1'}),
+          jsonEncode({'type': 'tool_call', 'id': 'e', 'name': 'edit_file', 'input': {'path': 'lib/main.dart'}}),
+          jsonEncode({'type': 'tool_result', 'id': 'e', 'output': 'ok'}),
+          jsonEncode({'type': 'artifact', 'name': 'implementation_plan.md', 'content': '# The plan'}),
+          jsonEncode({'type': 'text_delta', 'delta': 'Done.'}),
+          jsonEncode({'type': 'result', 'status': 'SUCCESS', 'conversation_id': 'conv-1'}),
+        ];
+
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(AntigravityMobileApp(storage: storage, connector: connector));
+    await settle(tester);
+    await tester.tap(find.text('VPS'));
+    await settle(tester, 30);
+    await tester.tap(find.byTooltip('New chat in project'));
+    await settle(tester, 20);
+
+    // Fast mode prefixes the prompt with /fast.
+    // The chip row scrolls sideways on a narrow phone.
+    await tester.drag(find.byKey(const Key('project-chip')), const Offset(-200, 0));
+    await settle(tester, 5);
+    await tester.tap(find.byKey(const Key('fast-chip')));
+    await settle(tester, 5);
+    expect(find.text('Fast: on'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, 'Rename the app');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await settle(tester, 40);
+    final start = host.commands.lastWhere((c) => c.contains('started='));
+    final b64 = RegExp(r"printf %s '([^']+)' \| b64d").firstMatch(start.replaceAll(r"'\''", "'"))!.group(1)!;
+    expect(utf8.decode(base64.decode(b64)), '/fast Rename the app');
+
+    // The reply shows the artifact and offers to view the edits.
+    expect(find.text('implementation_plan.md'), findsOneWidget);
+    await tester.tap(find.text('implementation_plan.md'));
+    await settle(tester, 20);
+    expect(find.text('Implementation plan'), findsOneWidget);
+    expect(find.text('The plan'), findsOneWidget);
+    await tester.pageBack();
+    await settle(tester);
+    await tester.tap(find.text('View changes'));
+    await settle(tester, 20);
+    expect(find.text('main.dart'), findsOneWidget, reason: 'switched to the Changes tab');
+    await tester.tap(find.text('Agent'));
+    await settle(tester);
+
+    // Agent menu → Artifacts lists reported and saved artifacts.
+    await tester.tap(find.byIcon(Icons.hub_outlined));
+    await settle(tester);
+    await tester.tap(find.text('Artifacts'));
+    await settle(tester, 20);
+    expect(find.text('Implementation plan'), findsOneWidget);
+    expect(find.text('Task'), findsOneWidget);
+    expect(host.commands.any((c) => c.contains('-type d -name') && c.contains('conv-1')), isTrue);
+    await tester.pageBack();
+    await settle(tester);
+
+    // Agent menu → Subagents opens this chat's conversation in the terminal.
+    await tester.tap(find.byIcon(Icons.hub_outlined));
+    await settle(tester);
+    await tester.tap(find.text('Subagents'));
+    await settle(tester, 50);
+    final pty = host.commands.lastWhere((c) => c.contains('tmux') || c.contains('agy'));
+    expect(pty, contains('--conversation'));
+    expect(pty, contains('conv-1'));
+    expect(host.lastPty!.written.join(), contains('/agents\r'));
+  });
+
   testWidgets('rejecting the host key does not connect', (tester) async {
     tester.view.physicalSize = const Size(1080, 2340);
     tester.view.devicePixelRatio = 2.75;

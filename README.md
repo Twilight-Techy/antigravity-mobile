@@ -28,8 +28,18 @@ over SSH.
   - Replies render as markdown with highlighted code, collapsible thinking,
     and tool-call cards (command, file, search…) showing input and output.
   - Follow-ups continue the same agy conversation (`--conversation <id>`).
-  - Pickers for model, permission mode (ask / plan / accept edits / full
-    auto) and reasoning effort.
+  - Pickers for model (from `agy models`), permission mode (Ask, Plan,
+    Accept edits, Full auto, which is the CLI's version of Turbo),
+    reasoning effort, and a **Fast** toggle that skips planning (`/fast`).
+  - **Artifacts** (plans, task lists, walkthroughs) appear as cards in
+    replies and in the Agent menu's Artifacts screen. That screen also finds
+    files agy saved under the conversation's id in `~/.gemini`.
+  - **Agent menu**: Subagents, Background tasks, Usage & quota, Context,
+    Permissions, MCP and settings open *this chat's own conversation* in the
+    interactive terminal (`agy --conversation <id>`), where you can see and
+    message subagents.
+  - Replies where the agent edited files get a **View changes** button that
+    jumps to the diff.
   - `/` command palette, `@` file mentions, Stop.
   - **Survives your phone sleeping.** On Linux/macOS the agent runs detached
     (`nohup`) and writes to `~/.antigravity-mobile/runs/`. If the connection

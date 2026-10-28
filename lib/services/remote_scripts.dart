@@ -71,6 +71,10 @@ abstract class RemoteScripts {
 
   String makeDir(String path);
 
+  /// Lists `size\tpath` for text files in folders under ~/.gemini named
+  /// after agy conversation [conversationId] (where agy keeps artifacts).
+  String findArtifacts(String conversationId);
+
   String git(String cwd, List<String> args);
 
   /// Diff for an untracked file against an empty file.
@@ -255,6 +259,15 @@ head -c $maxBytes -- "\$F" | base64
 
   @override
   String makeDir(String path) => wrap('mkdir -p -- ${_path(path)} && cd -- ${_path(path)} && pwd');
+
+  @override
+  String findArtifacts(String conversationId) => wrap('''
+find "\$HOME/.gemini" -maxdepth 6 -type d -name ${quote(conversationId)} 2>/dev/null | head -n 5 | while IFS= read -r d; do
+  find "\$d" -maxdepth 3 -type f \\( -name '*.md' -o -name '*.markdown' -o -name '*.txt' -o -name '*.json' -o -name '*.html' \\) 2>/dev/null
+done | head -n 200 | while IFS= read -r f; do
+  printf '%s\\t%s\\n' "\$(wc -c < "\$f" | tr -d ' ')" "\$f"
+done
+''');
 
   @override
   String git(String cwd, List<String> args) =>
@@ -589,6 +602,17 @@ try {
   @override
   String makeDir(String path) => wrap(
       '(New-Item -ItemType Directory -Force -Path ${_path(path)}).FullName');
+
+  @override
+  String findArtifacts(String conversationId) => wrap('''
+\$root = "\$env:USERPROFILE\\.gemini"
+if (-not (Test-Path -LiteralPath \$root)) { exit 0 }
+Get-ChildItem -LiteralPath \$root -Recurse -Depth 6 -Directory -Filter ${quote(conversationId)} -ErrorAction SilentlyContinue |
+  Select-Object -First 5 |
+  ForEach-Object { Get-ChildItem -LiteralPath \$_.FullName -Recurse -Depth 3 -File -Include *.md,*.markdown,*.txt,*.json,*.html -ErrorAction SilentlyContinue } |
+  Select-Object -First 200 |
+  ForEach-Object { "\$(\$_.Length)`t\$(\$_.FullName)" }
+''');
 
   @override
   String git(String cwd, List<String> args) => wrap('''

@@ -33,6 +33,9 @@ class FakeHost implements RemoteHost {
   }
 
   CommandResult _answer(String script) {
+    if (script.contains('-type d -name')) {
+      return const CommandResult(0, '120\t/home/dev/.gemini/antigravity/brain/conv-1/task.md\n', '');
+    }
     if (script.contains('echo "os=')) {
       return CommandResult(0, [
         'os=Linux',
@@ -118,10 +121,12 @@ class FakeHost implements RemoteHost {
     return FakeProcess.scripted(stdout: [r.stdout], stderr: [r.stderr], exitCode: r.exitCode);
   }
 
+  FakePty? lastPty;
+
   @override
   Future<RemotePty> startPty(String command, {int columns = 80, int rows = 24}) async {
     commands.add(command);
-    return FakePty();
+    return lastPty = FakePty();
   }
 
   @override

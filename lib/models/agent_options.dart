@@ -19,7 +19,7 @@ extension PermissionModeLabel on PermissionMode {
         PermissionMode.ask => 'Ask / read-only',
         PermissionMode.plan => 'Plan',
         PermissionMode.acceptEdits => 'Accept edits',
-        PermissionMode.fullAuto => 'Full auto',
+        PermissionMode.fullAuto => 'Full auto (Turbo)',
       };
 
   String get description => switch (this) {
@@ -28,7 +28,7 @@ extension PermissionModeLabel on PermissionMode {
         PermissionMode.plan => 'Agent plans before acting and does not edit files.',
         PermissionMode.acceptEdits => 'File edits are applied automatically.',
         PermissionMode.fullAuto =>
-          'Every tool call is auto-approved (--dangerously-skip-permissions).',
+          'Like Turbo in Antigravity: every command and edit runs without asking (--dangerously-skip-permissions).',
       };
 }
 
@@ -40,6 +40,7 @@ class AgentOptions {
     this.permissionMode = PermissionMode.acceptEdits,
     this.effort = Effort.auto,
     this.sandbox = false,
+    this.fast = false,
   });
 
   /// Model slug passed with `--model`; null uses agy's default.
@@ -50,19 +51,29 @@ class AgentOptions {
   /// `--sandbox`: restrict terminal execution.
   final bool sandbox;
 
+  /// Fast mode: skip planning for quick actions (agy's `/fast`).
+  final bool fast;
+
   AgentOptions copyWith({
     String? model,
     bool clearModel = false,
     PermissionMode? permissionMode,
     Effort? effort,
     bool? sandbox,
+    bool? fast,
   }) =>
       AgentOptions(
         model: clearModel ? null : (model ?? this.model),
         permissionMode: permissionMode ?? this.permissionMode,
         effort: effort ?? this.effort,
         sandbox: sandbox ?? this.sandbox,
+        fast: fast ?? this.fast,
       );
+
+  /// Applies Fast mode to a prompt: agy expands slash commands in headless
+  /// runs, so `/fast <task>` skips planning just like in the TUI.
+  String applyTo(String prompt) =>
+      fast && !prompt.startsWith('/') ? '/fast $prompt' : prompt;
 
   /// Flags shared by the headless chat runs and the interactive terminal.
   List<String> toArgs() => [
@@ -90,6 +101,7 @@ class AgentOptions {
         'permissionMode': permissionMode.name,
         'effort': effort.name,
         'sandbox': sandbox,
+        'fast': fast,
       };
 
   factory AgentOptions.fromJson(Map<String, dynamic> json) => AgentOptions(
@@ -103,5 +115,6 @@ class AgentOptions {
           orElse: () => Effort.auto,
         ),
         sandbox: json['sandbox'] as bool? ?? false,
+        fast: json['fast'] as bool? ?? false,
       );
 }

@@ -60,10 +60,15 @@ class TerminalSession extends ChangeNotifier {
   final _url = RegExp(r'https?://[^\s"<>\x00-\x1F]+');
   String _urlTail = '';
 
-  /// Name of the tmux session for this server + workspace.
+  /// agy conversation the terminal was opened on, if any.
+  String? _conversationId;
+  String? get conversationId => _conversationId;
+
+  /// Name of the tmux session for this server + workspace (and agy
+  /// conversation, when the terminal continues a chat).
   String? get tmuxSessionName {
     if (!session.profile.useTmux || session.agy?.scripts.isWindows == true) return null;
-    final ws = session.workspace ?? 'home';
+    final ws = '${session.workspace ?? 'home'}${_conversationId == null ? '' : '#$_conversationId'}';
     final base = ws.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).lastOrNull ?? 'home';
     final safe = base.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
     final hash = ws.codeUnits.fold<int>(0, (h, c) => (h * 31 + c) & 0xfffff).toRadixString(36);
@@ -72,10 +77,14 @@ class TerminalSession extends ChangeNotifier {
 
   /// Starts the terminal. [persist] keeps agy in tmux across disconnects;
   /// one-off sessions such as sign-in pass false.
+  ///
+  /// With [conversationId] agy resumes that conversation, so its subagents,
+  /// background tasks and artifacts are the chat's own.
   Future<void> start({
     TerminalMode mode = TerminalMode.agy,
     List<String> extraArgs = const [],
     bool persist = true,
+    String? conversationId,
   }) async {
     final agy = session.agy;
     if (agy == null || !session.isConnected || _starting) return;
@@ -84,13 +93,18 @@ class TerminalSession extends ChangeNotifier {
     _notify();
     await _closePty();
     _mode = mode;
+    _conversationId = mode == TerminalMode.agy ? conversationId : null;
     _dir = session.workspace;
     _extraArgs = extraArgs;
     _persist = persist;
     final command = agy.scripts.terminal(
       cwd: session.workspace ?? '~',
       runAgy: mode == TerminalMode.agy,
-      agyArgs: [...session.profile.agentOptions.toInteractiveArgs(), ...extraArgs],
+      agyArgs: [
+        ...session.profile.agentOptions.toInteractiveArgs(),
+        if (_conversationId != null) ...['--conversation', _conversationId!],
+        ...extraArgs,
+      ],
       tmuxSession: mode == TerminalMode.agy && persist ? tmuxSessionName : null,
     );
     try {
@@ -111,13 +125,15 @@ class TerminalSession extends ChangeNotifier {
     }
   }
 
-  /// Starts agy with an interactive slash command, e.g. `/config`.
-  Future<void> runSlashCommand(String command) async {
-    if (!running || _mode != TerminalMode.agy) {
-      await start();
+  /// Runs an interactive slash command, e.g. `/agents`, in agy — on the
+  /// chat's own conversation when [conversationId] is given.
+  Future<void> runSlashCommand(String command, {String? conversationId}) async {
+    final reuse = running && _mode == TerminalMode.agy && _conversationId == conversationId;
+    if (!reuse) {
+      await start(conversationId: conversationId);
       await Future.delayed(const Duration(milliseconds: 1500));
     }
-    sendText('$command\r');
+    if (command.isNotEmpty) sendText('$command\r');
   }
 
   void sendText(String text) => _pty?.write(utf8.encode(text));
@@ -170,7 +186,7 @@ class TerminalSession extends ChangeNotifier {
       // Reconnected: re-attach (tmux keeps agy alive on the server).
       if (_mode != null) {
         terminal.write('\r\n\x1b[2m[reconnecting…]\x1b[0m\r\n');
-        unawaited(start(mode: _mode!, extraArgs: _extraArgs, persist: _persist));
+        unawaited(start(mode: _mode!, extraArgs: _extraArgs, persist: _persist, conversationId: _conversationId));
       }
     }
   }

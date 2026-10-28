@@ -128,4 +128,14 @@ void main() {
     expect(c2.messages.single.status, MessageStatus.interrupted);
     expect(c2.messages.single.parts.single.toolStatus, ToolStatus.failed);
   });
+
+  test('fast mode prefixes prompts with /fast and survives JSON', () {
+    const o = AgentOptions(fast: true);
+    expect(o.applyTo('fix the typo'), '/fast fix the typo');
+    expect(o.applyTo('/boost big task'), '/boost big task');
+    expect(const AgentOptions().applyTo('x'), 'x');
+    expect(AgentOptions.fromJson(o.toJson()).fast, isTrue);
+    expect(o.toArgs(), isNot(contains('/fast')));
+    expect(PermissionMode.fullAuto.label, contains('Turbo'));
+  });
 }

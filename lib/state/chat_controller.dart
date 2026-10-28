@@ -220,7 +220,7 @@ class ChatController extends ChangeNotifier {
     final run = agy.createRun(
       runId: reply.runId!,
       cwd: dirFor(convo),
-      prompt: prompt,
+      prompt: options.applyTo(prompt),
       agyArgs: args,
       notify: session.profile.notifyOnFinish || (ntfy != null && ntfy.isNotEmpty)
           ? RunNotify(
