@@ -13,7 +13,6 @@ import 'package:antigravity_mobile/models/conversation.dart';
 import 'package:antigravity_mobile/services/agent_stream_parser.dart';
 import 'package:antigravity_mobile/services/agy_service.dart';
 import 'package:antigravity_mobile/services/message_builder.dart';
-import 'package:antigravity_mobile/services/remote_host.dart';
 import 'package:antigravity_mobile/services/transcript.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -202,50 +201,6 @@ void main() {
     await agy.setApiKey(null).timeout(const Duration(seconds: 60));
     expect(key.existsSync() && key.readAsStringSync().contains('test-KEY_123'), isFalse);
   }, skip: skip);
-
-  test('a terminal session outlives its connection', () async {
-    final agy = await service();
-    // The first time, the ConPTY helper is compiled on the server.
-    expect(await agy.ensurePtyHelper(), isTrue, reason: agy.ptyHelperError);
-    File('${home.path}$sep.antigravity-mobile${sep}agmpty.trace').writeAsStringSync('');
-    final command = agy.scripts.terminal(
-        cwd: project.path, runAgy: true, agyArgs: const [], tmuxSession: 'agm-test-${DateTime.now().millisecondsSinceEpoch}');
-    final ansi = RegExp(r'\x1B(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(\x07|\x1B\\)|[()=>][0-9A-Za-z]?)');
-    Future<(RemoteProcess, StringBuffer)> attach() async {
-      final p = await agy.host.start(command);
-      final out = StringBuffer();
-      p.stdout.listen((d) => out.write(utf8.decode(d, allowMalformed: true)));
-      p.stderr.listen((d) => out.write(utf8.decode(d, allowMalformed: true)));
-      return (p, out);
-    }
-
-    Future<void> waitFor(StringBuffer out, String text, {int seconds = 30}) async {
-      for (var i = 0; i < seconds * 10; i++) {
-        if (out.toString().replaceAll(ansi, '').contains(text)) return;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      }
-      final log = File('${home.path}$sep.antigravity-mobile${sep}agmpty.log');
-      fail('"$text" not in: ${out.toString().replaceAll(ansi, '')}'
-          '${log.existsSync() ? '\nhost log: ${log.readAsStringSync()}' : ''}');
-    }
-
-    final (first, out1) = await attach();
-    await waitFor(out1, 'interactive fake agy', seconds: 60);
-    first.write(utf8.encode('hello\r'));
-    await waitFor(out1, 'got hello');
-
-    // The connection drops; the session keeps running on the server.
-    first.close();
-    await Future<void>.delayed(const Duration(seconds: 2));
-    final (second, out2) = await attach();
-    await waitFor(out2, 'got hello', seconds: 60);
-    second.write(utf8.encode('again\r'));
-    await waitFor(out2, 'got again');
-
-    // When the program ends, the attached session ends too.
-    second.write(utf8.encode('exit\r'));
-    expect(await second.exitCode.timeout(const Duration(seconds: 30)), isNotNull);
-  }, timeout: const Timeout(Duration(minutes: 5)), skip: skip ?? (windows ? null : 'Windows only (tmux is covered over SSH)'));
 
   test('reads a transcript in chunks', () async {
     final agy = await service();

@@ -70,10 +70,7 @@ class _LocalProcess implements RemoteProcess {
   Future<int?> get exitCode => _p.exitCode;
 
   @override
-  void write(List<int> data) {
-    _p.stdin.add(data);
-    unawaited(_p.stdin.flush());
-  }
+  void write(List<int> data) => _p.stdin.add(data);
 
   void closeStdin() => unawaited(_p.stdin.close());
 
