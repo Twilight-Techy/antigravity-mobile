@@ -125,6 +125,13 @@ abstract class RemoteScripts {
   static String b64(String s) => base64.encode(utf8.encode(s));
 }
 
+/// The same, for the sqlite3 command-line tool (`__STORE__` is replaced
+/// with the store's name).
+const _listConversationsSql =
+    "select json_object('id', conversation_id, 'title', title, 'preview', preview, 'steps', step_count, "
+    "'modified', last_modified_time, 'workspaces', workspace_uris, 'parent', parent_conversation_id, "
+    "'store', coalesce(nullif(app_data_dir, ''), '__STORE__'), 'killed', killed = 1) from conversation_summaries;";
+
 /// Reads agy's conversation index (SQLite) read-only.
 const _listConversationsPy = r'''
 import json, os, sqlite3
@@ -314,8 +321,19 @@ done
 if command -v python3 >/dev/null 2>&1; then
 python3 -c ${quote(_listConversationsPy)} && exit 0
 fi
+if command -v sqlite3 >/dev/null 2>&1; then
+  ok=1
+  for store in antigravity-cli antigravity; do
+    db="\$HOME/.gemini/\$store/conversation_summaries.db"
+    [ -f "\$db" ] || continue
+    sqlite3 -readonly "\$db" ${quote(_listConversationsSql)} 2>/dev/null | sed "s/\\"__STORE__\\"/\\"\$store\\"/" || ok=0
+  done
+  [ \$ok = 1 ] && exit 0
+fi
+T=\$(printf '\\t')
 for store in antigravity-cli antigravity; do
-  b="\$HOME/.gemini/\$store/brain"
+  g="\$HOME/.gemini/\$store"
+  b="\$g/brain"
   [ -d "\$b" ] || continue
   skip=\$(ls "\$b"/*/.system_generated/subagents/ 2>/dev/null | sed -n 's/\\.json\$//p')
   for d in "\$b"/*/; do
@@ -326,6 +344,15 @@ for store in antigravity-cli antigravity; do
     t=\$(date -r "\$f" +%s 2>/dev/null || stat -c %Y "\$f" 2>/dev/null || echo 0)
     p=\$(head -n 1 "\$f" | sed -n 's/.*<USER_REQUEST>\\\\n\\(.*\\)\\\\n<\\/USER_REQUEST>.*/\\1/p' | cut -c1-200)
     printf 'F\\t%s\\t%s\\t%s\\t%s\\n' "\$store" "\$id" "\$t" "\$p"
+  done
+  # Folders, from agy's index read as bytes: each summary has the
+  # conversation id followed by its workspace URI; the workspace_uris
+  # column has the same URIs, cleanly quoted.
+  for db in "\$g/conversation_summaries.db" "\$g/conversation_summaries.db-wal"; do
+    [ -f "\$db" ] || continue
+    LC_ALL=C grep -aoE '2[\$][0-9a-f-]{36}:.{1,2}file://[!-~]+' "\$db" 2>/dev/null |
+      LC_ALL=C sed -E "s/^.*2[\$]([0-9a-f-]{36}):.{1,2}(file:[!-~]+)\$/W\${T}\$store\${T}\\1\${T}\\2/"
+    LC_ALL=C grep -aoE '[[]"file://[^"]+"' "\$db" 2>/dev/null | LC_ALL=C sed -E "s/^[[]\\"(.*)\\"\$/J\${T}\\1/"
   done
 done
 ''');
@@ -518,18 +545,7 @@ class PowerShellScripts extends RemoteScripts {
 
   /// PowerShell accepts a base64 UTF-16LE script, which sidesteps quoting
   /// through cmd.exe or whichever shell sshd is configured to use.
-  String wrap(String script) {
-    final full = '\$ProgressPreference="SilentlyContinue"\n'
-        '[Console]::OutputEncoding=[Text.Encoding]::UTF8\n$script';
-    final units = <int>[];
-    for (final c in full.codeUnits) {
-      units
-        ..add(c & 0xff)
-        ..add(c >> 8);
-    }
-    return 'powershell -NoLogo -NoProfile -NonInteractive '
-        '-ExecutionPolicy Bypass -EncodedCommand ${base64.encode(units)}';
-  }
+  String wrap(String script) => _powershellCommand('[Console]::OutputEncoding=[Text.Encoding]::UTF8\n$script');
 
   String _env() => [
         r'$env:Path = [Environment]::GetEnvironmentVariable("Path","User") + ";" + [Environment]::GetEnvironmentVariable("Path","Machine") + ";$env:USERPROFILE\.local\bin"',
@@ -714,20 +730,35 @@ foreach (\$store in @('antigravity-cli', 'antigravity')) {
       "F`t\$store`t\$(\$_.Name)`t\$t`t\$p"
     }
   }
+  # Folders, from agy's index read as bytes (see the POSIX version).
+  foreach (\$db in @("\$b\\..\\conversation_summaries.db", "\$b\\..\\conversation_summaries.db-wal")) {
+    if (-not (Test-Path -LiteralPath \$db)) { continue }
+    try {
+      \$fs = [IO.File]::Open(\$db, "Open", "Read", "ReadWrite")
+      \$bytes = New-Object byte[] \$fs.Length
+      \$read = 0
+      while (\$read -lt \$bytes.Length) { \$n = \$fs.Read(\$bytes, \$read, \$bytes.Length - \$read); if (\$n -le 0) { break }; \$read += \$n }
+      \$fs.Close()
+      \$text = [Text.Encoding]::GetEncoding(28591).GetString(\$bytes, 0, \$read)
+      foreach (\$m in [regex]::Matches(\$text, '2\\\$([0-9a-f-]{36}):[\\s\\S]{1,2}(file://[!-~]+)')) { "W`t\$store`t\$(\$m.Groups[1].Value)`t\$(\$m.Groups[2].Value)" }
+      foreach (\$m in [regex]::Matches(\$text, '\\["(file://[^"]+)"')) { "J`t\$(\$m.Groups[1].Value)" }
+    } catch {}
+  }
 }
 ''');
 
   @override
   String readTranscript(String store, String id, int offset, int maxBytes) => wrap('''
 \$f = Join-Path \$env:USERPROFILE ".gemini\\$store\\brain\\$id\\.system_generated\\logs\\transcript_full.jsonl"
-if (-not (Test-Path -LiteralPath \$f)) { "size=-1"; exit 0 }
+if (-not (Test-Path -LiteralPath \$f)) { [Console]::Out.WriteLine("size=-1"); exit 0 }
 \$s = [IO.File]::Open(\$f, 'Open', 'Read', 'ReadWrite')
 try {
-  "size=\$(\$s.Length)"
+  [Console]::Out.WriteLine("size=\$(\$s.Length)")
   [void]\$s.Seek($offset, 'Begin')
   \$buf = New-Object byte[] ([Math]::Max(0, [Math]::Min($maxBytes, \$s.Length - $offset)))
   \$n = \$s.Read(\$buf, 0, \$buf.Length)
   [Console]::Out.Write([Text.Encoding]::UTF8.GetString(\$buf, 0, \$n))
+  [Console]::Out.Flush()
 } finally { \$s.Close() }
 ''');
 
@@ -744,6 +775,12 @@ Set-Location -LiteralPath ${_path(cwd)}
 exit 0
 ''');
 
+  /// Starts the run detached from the SSH session: Windows OpenSSH ends a
+  /// session's processes with it, but a process created through WMI
+  /// (`Win32_Process.Create`) is outside the session. That runner starts
+  /// agy with its output in files under `~\.antigravity-mobile\runs`, like
+  /// on Linux, so [followRun] can pick the stream up again after the
+  /// connection drops.
   @override
   String startRun({
     required String runId,
@@ -751,23 +788,78 @@ exit 0
     required String prompt,
     required List<String> agyArgs,
     RunNotify? notify,
-  }) =>
-      wrap('''
+  }) {
+    // The command line agy gets, quoted by the MSVC rules.
+    final argLine = ['-p', prompt, '--output-format', 'stream-json', ...agyArgs]
+        .map((a) => '"${msvcEscape(a)}"')
+        .join(' ');
+    // The runner gets the user's default environment, not this session's,
+    // so the start script fills in the paths it resolved (`__AGM_…__`).
+    // The API key is read from its file, never put on a command line.
+    final runner = '''
+\$H = '__AGM_HOME__'
+\$F = '__AGM_F__'
+\$agy = '__AGM_AGY__'
+\$k = "\$H\\.antigravity-mobile\\gemini_api_key"
+if (Test-Path -LiteralPath \$k) { \$env:GEMINI_API_KEY = (Get-Content -Raw -LiteralPath \$k).Trim() }
+\$code = 1
+try {
+  \$argLine = [IO.File]::ReadAllText("\$F.args")
+  \$p = Start-Process -FilePath \$agy -ArgumentList \$argLine -WorkingDirectory ([IO.File]::ReadAllText("\$F.cwd")) -RedirectStandardInput "\$F.in" -RedirectStandardOutput "\$F.out" -RedirectStandardError "\$F.err" -NoNewWindow -PassThru
+  \$null = \$p.Handle
+  Set-Content -LiteralPath "\$F.pid" -Value \$p.Id
+  \$p.WaitForExit()
+  \$code = \$p.ExitCode
+} catch {
+  [IO.File]::AppendAllText("\$F.err", "\$_`r`n")
+  \$code = 127
+}
+[IO.File]::WriteAllText("\$F.exit", "\$code")
+${notify == null ? '' : _afterRun(notify)}
+''';
+    return wrap('''
 ${_env()}
 \$d = "$_runDir"
 New-Item -ItemType Directory -Force -Path \$d | Out-Null
-Set-Content -LiteralPath "\$d\\$runId.pid" -Value \$PID
-if (-not (Test-Path -LiteralPath ${_path(cwd)})) { [Console]::Error.WriteLine("Workspace not found: $cwd"); [Console]::Error.WriteLine("${exitMarker}3"); exit 3 }
-Set-Location -LiteralPath ${_path(cwd)}
-if (-not (Get-Command agy -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine("agy is not installed or not on PATH"); [Console]::Error.WriteLine("${exitMarker}127"); exit 127 }
-if (Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) { \$PSNativeCommandArgumentPassing = "Legacy" }
-\$prompt = ${_decode(msvcEscape(prompt))}
-& agy -p \$prompt --output-format stream-json ${agyArgs.map(quote).join(' ')}
-\$code = \$LASTEXITCODE
-${notify == null ? '' : _afterRun(notify)}
-[Console]::Error.WriteLine("$exitMarker\$code")
-exit \$code
+\$d = (Resolve-Path -LiteralPath \$d).Path
+\$F = "\$d\\$runId"
+Get-ChildItem -Path \$d -File -ErrorAction SilentlyContinue | Where-Object { \$_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force -ErrorAction SilentlyContinue
+if (-not (Test-Path -LiteralPath ${_path(cwd)})) { [Console]::Error.WriteLine("Workspace not found: $cwd"); exit 3 }
+if (-not (Get-Command agy -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine("agy is not installed or not on PATH"); exit 127 }
+\$cwd = (Resolve-Path -LiteralPath ${_path(cwd)}).Path
+[IO.File]::WriteAllText("\$F.cwd", \$cwd)
+[IO.File]::WriteAllText("\$F.args", ${_decode(argLine)})
+[IO.File]::WriteAllText("\$F.in", "")
+foreach (\$x in @("out", "err", "exit")) { Remove-Item -LiteralPath "\$F.\$x" -Force -ErrorAction SilentlyContinue }
+\$agyPath = (Get-Command agy).Source
+\$runner = ${_decode(runner)}
+\$runner = \$runner.Replace('__AGM_HOME__', \$env:USERPROFILE.Replace("'", "''")).Replace('__AGM_F__', \$F.Replace("'", "''")).Replace('__AGM_AGY__', \$agyPath.Replace("'", "''"))
+\$cmd = "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(\$runner))
+\$id = \$null
+try {
+  \$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$cmd; CurrentDirectory = \$cwd } -ErrorAction Stop
+  if (\$r.ReturnValue -eq 0) { \$id = \$r.ProcessId }
+} catch {}
+if (-not \$id) {
+  # Without WMI the run still works, but ends if the connection drops.
+  \$id = (Start-Process -FilePath powershell -ArgumentList \$cmd.Substring(11) -WindowStyle Hidden -PassThru).Id
+}
+Set-Content -LiteralPath "\$F.pid" -Value \$id
+"started=$runId"
 ''');
+  }
+
+  /// `powershell … -EncodedCommand …` running [script].
+  String _powershellCommand(String script, {bool hidden = false}) {
+    final units = <int>[];
+    for (final c in '\$ProgressPreference="SilentlyContinue"\n$script'.codeUnits) {
+      units
+        ..add(c & 0xff)
+        ..add(c >> 8);
+    }
+    return 'powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+        '${hidden ? '-WindowStyle Hidden ' : ''}-EncodedCommand ${base64.encode(units)}';
+  }
 
   static const _pushFile = r'$env:USERPROFILE\.antigravity-mobile\push';
 
@@ -817,8 +909,45 @@ Set-Content -LiteralPath "$_pushFile" -Value @(Get-Content -LiteralPath "$_pushF
 ''');
 
   @override
-  String followRun(String runId, int offset) =>
-      throw UnsupportedError('Detached runs are not supported on Windows.');
+  String followRun(String runId, int offset) => wrap('''
+\$F = "$_runDir\\$runId"
+\$i = 0
+while (-not (Test-Path -LiteralPath "\$F.out") -and -not (Test-Path -LiteralPath "\$F.exit") -and \$i -lt 100) { Start-Sleep -Milliseconds 200; \$i++ }
+if (-not (Test-Path -LiteralPath "\$F.out")) {
+  if (Test-Path -LiteralPath "\$F.err") { Get-Content -LiteralPath "\$F.err" -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::Error.WriteLine(\$_) } }
+  \$c = if (Test-Path -LiteralPath "\$F.exit") { (Get-Content -LiteralPath "\$F.exit" | Select-Object -First 1).Trim() } else { "255" }
+  if (\$c -eq "255") { [Console]::Error.WriteLine("Run output not found on the server.") }
+  [Console]::Error.WriteLine("$exitMarker\$c")
+  exit 0
+}
+\$o = [Console]::OpenStandardOutput()
+\$fs = [IO.File]::Open("\$F.out", "Open", "Read", "ReadWrite")
+\$pos = [long]$offset
+\$buf = New-Object byte[] 65536
+\$gone = 0
+while (\$true) {
+  [void]\$fs.Seek(\$pos, "Begin")
+  \$n = \$fs.Read(\$buf, 0, \$buf.Length)
+  if (\$n -gt 0) { \$o.Write(\$buf, 0, \$n); \$o.Flush(); \$pos += \$n; continue }
+  if (Test-Path -LiteralPath "\$F.exit") {
+    Start-Sleep -Milliseconds 300
+    [void]\$fs.Seek(\$pos, "Begin")
+    while ((\$n = \$fs.Read(\$buf, 0, \$buf.Length)) -gt 0) { \$o.Write(\$buf, 0, \$n); \$pos += \$n }
+    \$o.Flush()
+    break
+  }
+  \$p = Get-Content -LiteralPath "\$F.pid" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not \$p -or -not (Get-Process -Id ([int]\$p) -ErrorAction SilentlyContinue)) {
+    # The runner records the exit code right after agy ends; give it time.
+    \$gone++
+    if (\$gone -gt 10 -and -not (Test-Path -LiteralPath "\$F.exit")) { Set-Content -LiteralPath "\$F.exit" -Value 255 }
+  } else { \$gone = 0 }
+  Start-Sleep -Milliseconds 300
+}
+\$fs.Close()
+if (Test-Path -LiteralPath "\$F.err") { Get-Content -LiteralPath "\$F.err" -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::Error.WriteLine(\$_) } }
+[Console]::Error.WriteLine("$exitMarker" + (Get-Content -LiteralPath "\$F.exit" | Select-Object -First 1).Trim())
+''');
 
   @override
   String cancelRun(String runId) => wrap('''
@@ -827,7 +956,7 @@ if (-not (Test-Path \$f)) { exit 0 }
 \$root = [int](Get-Content \$f | Select-Object -First 1)
 function Stop-Tree([int]\$id) {
   Get-CimInstance Win32_Process -Filter "ParentProcessId=\$id" | ForEach-Object { Stop-Tree \$_.ProcessId }
-  if (\$id -ne \$root) { Stop-Process -Id \$id -Force -ErrorAction SilentlyContinue }
+  Stop-Process -Id \$id -Force -ErrorAction SilentlyContinue
 }
 Stop-Tree \$root
 ''');

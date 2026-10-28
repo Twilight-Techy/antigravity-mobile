@@ -27,6 +27,29 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
+  # The server scripts run for real: sh on Linux, PowerShell on Windows
+  # (detached runs through WMI, resuming, Stop, listing conversations).
+  scripts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y sqlite3
+      - run: dart compile exe tool/fake_agy.dart -o build/fake_agy/agy${{ runner.os == 'Windows' && '.exe' || '' }}
+      - run: flutter test test/integration/local_scripts_test.dart
+        env:
+          AGM_FAKE_AGY: ${{ github.workspace }}/build/fake_agy/agy${{ runner.os == 'Windows' && '.exe' || '' }}
+
   relay:
     runs-on: ubuntu-latest
     defaults:

@@ -56,8 +56,9 @@ over SSH.
   - See [docs/FEATURE_MAP.md](docs/FEATURE_MAP.md) for how every documented
     agy feature maps to the app.
   - `/` command palette, `@` file mentions, Stop.
-  - **Survives your phone sleeping.** On Linux/macOS the agent runs detached
-    (`nohup`) and writes to `~/.antigravity-mobile/runs/`. If the connection
+  - **Survives your phone sleeping.** The agent runs detached (`nohup` on
+    Linux/macOS, a WMI-created process on Windows) and writes to
+    `~/.antigravity-mobile/runs/`. If the connection
     drops, the app reconnects and resumes the stream from the last byte it
     received.
 - **Files**: browse the workspace, syntax-highlighted viewer, rendered
@@ -91,7 +92,8 @@ over SSH.
 
 | Need | Mechanism |
 | --- | --- |
-| Chat replies | `agy -p "<prompt>" --output-format stream-json --print-timeout 0s [--conversation id] [--mode/--model/--effort/--agent/--add-dir …]` in the chat's folder. Detached on POSIX, streamed with `tail -f`, resumable by byte offset |
+| Chat replies | `agy -p "<prompt>" --output-format stream-json --print-timeout 0s [--conversation id] [--mode/--model/--effort/--agent/--add-dir …]` in the chat's folder. Detached (`nohup` on Linux/macOS, a WMI-created process on Windows), streamed from its output file, resumable by byte offset |
+| Conversation list | agy's index (`conversation_summaries.db`) read with `python3` or `sqlite3`; without either, the transcripts plus a byte-level read of the index for each chat's folder |
 | Sign-in, `/config`, approvals | Interactive `agy` in a PTY (`tmux new-session -A` when available) |
 | Models | `agy models` (`id<TAB>name` lines) |
 | Quota, credits, skills, effort levels | `agy -p /usage` (and `/credits`, `/skills`, `/hooks`, `/help`, `/effort`) with `--output-format stream-json`: agy answers these itself |
@@ -180,6 +182,15 @@ AGM_SSH_TEST_KEY=path/to/private_key AGM_SSH_TEST_HOST=host \
 AGM_SSH_TEST_PORT=22 AGM_SSH_TEST_USER=user flutter test test/integration/ssh_integration_test.dart
 ```
 
+`test/integration/local_scripts_test.dart` runs the server scripts on the
+machine running the tests, without SSH: sh on Linux/macOS and PowerShell on
+Windows (CI runs it on both). It needs the Dart fake agy:
+
+```sh
+dart compile exe tool/fake_agy.dart -o build/fake_agy/agy
+AGM_FAKE_AGY=build/fake_agy/agy flutter test test/integration/local_scripts_test.dart
+```
+
 `test/integration/real_agy_test.dart` runs the same pipeline against the
 **real** agy (`AGM_REAL_AGY=1`). Without a Google account to spare, point agy
 at `tool/mock_gemini.py`, a scripted stand-in for the Gemini API:
@@ -189,12 +200,10 @@ at `tool/mock_gemini.py`, a scripted stand-in for the Gemini API:
 
 ## Limitations
 
-- Windows servers don't support resuming a reply after a disconnect, or tmux
-  persistence.
+- On Windows servers the Terminal tab has no tmux, so an interactive session
+  ends when the connection drops. Chat replies are not affected: they run
+  detached (started through WMI) and resume after a reconnect, as on Linux.
 - Approval prompts are interactive only in the Terminal tab (see above).
-- Listing conversations reads agy's SQLite index with `python3`. Without
-  python3 the list still appears (from agy's transcripts) but chats can't be
-  placed in their project folder. Windows servers always use that fallback.
 - Settings such as `modelProvider` are kept per store, so a Gemini API key
   set up in the app applies to the CLI's store; desktop-app conversations
   use the desktop app's own sign-in.

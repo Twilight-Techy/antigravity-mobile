@@ -254,7 +254,31 @@ class ServerConversation {
   /// index, or `F<TAB>…` lines from scanning transcripts.
   static List<ServerConversation> parseList(String output, {bool windows = false}) {
     final byId = <String, ServerConversation>{};
+    // Without python3, folders come from agy's index read as bytes: `W`
+    // lines pair an id with its workspace URI (possibly followed by stray
+    // bytes), `J` lines are the clean URIs of the workspace_uris column.
+    final rawUris = <String, String>{};
+    final cleanUris = <String>{};
+    String? path(String uri) {
+      final u = Uri.tryParse(uri);
+      if (u == null || u.scheme != 'file') return null;
+      try {
+        return u.toFilePath(windows: windows);
+      } catch (_) {
+        return null;
+      }
+    }
+
     for (final line in const LineSplitter().convert(output)) {
+      if (line.startsWith('W\t')) {
+        final f = line.split('\t');
+        if (f.length >= 4) rawUris['${f[1]}/${f[2]}'] = f.sublist(3).join('\t');
+        continue;
+      }
+      if (line.startsWith('J\t')) {
+        cleanUris.add(line.substring(2));
+        continue;
+      }
       ServerConversation? c;
       if (line.startsWith('{')) {
         try {
@@ -264,11 +288,10 @@ class ServerConversation {
             try {
               final uris = jsonDecode(m['workspaces'] as String? ?? '[]');
               final first = uris is List ? uris.whereType<String>().firstOrNull : null;
-              final uri = first == null ? null : Uri.tryParse(first);
-              if (uri != null && uri.scheme == 'file') workspace = uri.toFilePath(windows: windows);
+              if (first != null) workspace = path(first);
             } catch (_) {}
             final parent = m['parent'] as String? ?? '';
-            if (m['killed'] == true && parent.isNotEmpty) continue;
+            if ((m['killed'] == true || m['killed'] == 1) && parent.isNotEmpty) continue;
             c = ServerConversation(
               id: m['id'] as String,
               store: m['store'] as String? ?? cliStore,
@@ -294,6 +317,28 @@ class ServerConversation {
         }
       }
       if (c != null && RegExp(r'^[A-Za-z0-9._-]{4,200}$').hasMatch(c.id)) byId[c.id] = c;
+    }
+    if (rawUris.isNotEmpty) {
+      for (final entry in byId.entries.toList()) {
+        final c = entry.value;
+        final raw = rawUris['${c.store}/${c.id}'];
+        if (c.workspace != null || raw == null) continue;
+        // The longest clean URI the raw one starts with drops stray bytes.
+        final clean = cleanUris.where(raw.startsWith).fold<String?>(
+            null, (best, u) => best == null || u.length > best.length ? u : best);
+        final workspace = clean == null ? null : path(clean);
+        if (workspace == null) continue;
+        byId[entry.key] = ServerConversation(
+          id: c.id,
+          store: c.store,
+          title: c.title,
+          preview: c.preview,
+          steps: c.steps,
+          modified: c.modified,
+          workspace: workspace,
+          parentId: c.parentId,
+        );
+      }
     }
     return byId.values.toList();
   }
@@ -691,7 +736,9 @@ class AgentRun {
   bool _cancelled = false;
   bool _finished = false;
 
-  bool get resumable => !service.scripts.isWindows;
+  /// Runs are detached on every platform, so a dropped connection can be
+  /// followed up with [resume].
+  bool get resumable => true;
 
   Future<void> start() async {
     final scripts = service.scripts;
@@ -702,10 +749,6 @@ class AgentRun {
       agyArgs: agyArgs,
       notify: notify,
     );
-    if (scripts.isWindows) {
-      await _follow(command, 0);
-      return;
-    }
     final r = await service.host.run(command, timeout: const Duration(seconds: 30));
     if (!r.ok || !r.stdout.contains('started=')) {
       _finish(RunExit(r.exitCode == 0 ? 1 : r.exitCode, r.combined));
@@ -760,7 +803,7 @@ class AgentRun {
       }
     });
 
-    final channelCode = await process.exitCode;
+    await process.exitCode;
     await Future.wait([outDone, errDone])
         .timeout(const Duration(seconds: 3), onTimeout: () => const []);
     _process = null;
@@ -772,11 +815,10 @@ class AgentRun {
     }
 
     if (_cancelled) {
-      _finish(RunExit(exitCode ?? 130, stderr.toString()));
+      // Stopped: agy got SIGINT (or, on Windows, was ended).
+      _finish(RunExit(exitCode == 0 ? 0 : 130, stderr.toString()));
     } else if (exitCode != null) {
       _finish(RunExit(exitCode!, stderr.toString()));
-    } else if (service.scripts.isWindows && channelCode != null) {
-      _finish(RunExit(channelCode, stderr.toString()));
     } else {
       _finish(RunLost(
           stderr.isEmpty ? 'Connection to the server was lost.' : stderr.toString(),
@@ -790,7 +832,6 @@ class AgentRun {
       await service.host.run(service.scripts.cancelRun(runId),
           timeout: const Duration(seconds: 15));
     } catch (_) {}
-    if (service.scripts.isWindows) _process?.close();
   }
 
   /// Stops streaming locally without touching the remote run. The run can be
