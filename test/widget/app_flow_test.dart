@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:antigravity_mobile/main.dart';
 import 'package:antigravity_mobile/models/conversation.dart';
 import 'package:antigravity_mobile/models/server_profile.dart';
 import 'package:antigravity_mobile/services/notifier.dart';
+import 'package:antigravity_mobile/services/push_service.dart';
 import 'package:antigravity_mobile/services/remote_host.dart';
 import 'package:antigravity_mobile/services/ssh_host.dart';
 import 'package:antigravity_mobile/services/storage_service.dart';
@@ -227,7 +229,8 @@ void main() {
     await settle(tester, 40);
 
     expect(notifier.shown, hasLength(1));
-    final (title, body, conversationId) = notifier.shown.single;
+    final (title, body, link) = notifier.shown.single;
+    expect(link, startsWith('antigravity://open?server=p1&conversation='));
     expect(title, 'Agent finished in project');
     expect(body, contains('Flutter app'));
     expect(notifier.keptAlive, isFalse);
@@ -239,7 +242,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.add_comment_outlined));
     await settle(tester);
     expect(find.text('Fix the build'), findsNothing);
-    notifier.tap(conversationId);
+    notifier.tap(link);
     await settle(tester);
     expect(find.text('Fix the build'), findsOneWidget);
 
@@ -249,6 +252,89 @@ void main() {
     await tester.tap(find.byTooltip('Send'));
     await settle(tester, 40);
     expect(notifier.shown, hasLength(1));
+  });
+
+  testWidgets('an antigravity:// link opens the server and conversation', (tester) async {
+    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
+    await storage.saveProfiles([profile]);
+    await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
+    await storage.trustHostKey('h:22', 'SHA256:abc123');
+    for (final (id, title) in [('old', 'Older chat'), ('new', 'Newer chat')]) {
+      await storage.saveConversation(Conversation(
+        id: id,
+        serverId: 'p1',
+        workspace: '/home/dev/project',
+        title: title,
+        createdAt: DateTime(2026),
+        updatedAt: id == 'new' ? DateTime(2026, 2) : DateTime(2026, 1),
+        messages: [
+          ChatMessage(id: 'u$id', role: MessageRole.user, createdAt: DateTime(2026),
+              parts: [MessagePart(kind: PartKind.text, text: 'Prompt of $title')]),
+        ],
+      ));
+    }
+    final links = StreamController<Uri>();
+    addTearDown(links.close);
+
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(AntigravityMobileApp(storage: storage, connector: connector, deepLinks: links.stream));
+    await settle(tester);
+    expect(find.text('VPS'), findsOneWidget);
+
+    // Cold: from the server list straight into the older conversation.
+    links.add(Uri.parse('antigravity://open?server=p1&conversation=old'));
+    await settle(tester, 40);
+    expect(find.text('Prompt of Older chat'), findsOneWidget);
+
+    // Warm: the open session switches conversation without reconnecting.
+    final connects = host.commands.where((c) => c.contains('echo "os=')).length;
+    links.add(Uri.parse('antigravity://open?server=p1&conversation=new'));
+    await settle(tester, 20);
+    expect(find.text('Prompt of Newer chat'), findsOneWidget);
+    expect(host.commands.where((c) => c.contains('echo "os=')).length, connects);
+
+    // Unknown server or junk links are ignored.
+    links.add(Uri.parse('antigravity://open?server=nope&conversation=old'));
+    links.add(Uri.parse('https://example.com'));
+    await settle(tester, 10);
+    expect(find.text('Prompt of Newer chat'), findsOneWidget);
+  });
+
+  testWidgets('registers for relay pushes and skips duplicate local notifications', (tester) async {
+    final notifier = SilentNotifier();
+    final push = NoPushService(fakeRegistration: const PushRegistration('https://relay.example.dev', 'k-123'));
+    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
+    await storage.saveProfiles([profile]);
+    await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
+    await storage.trustHostKey('h:22', 'SHA256:abc123');
+
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(AntigravityMobileApp(storage: storage, connector: connector, notifier: notifier, push: push));
+    await settle(tester);
+    await tester.tap(find.text('VPS'));
+    await settle(tester, 30);
+
+    final register = host.stdinFor.entries.firstWhere((e) => e.key.contains('push.new'));
+    expect(register.value, 'https://relay.example.dev\tk-123');
+
+    await tester.tap(find.text('project'));
+    await settle(tester, 30);
+    await tester.enterText(find.byType(TextField).last, 'Fix the build');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pump();
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await settle(tester, 40);
+    expect(notifier.shown, isEmpty, reason: 'the server pushes through the relay instead');
+    final start = host.commands.lastWhere((c) => c.contains('started='));
+    expect(start, contains('/send'));
+    expect(start, contains('antigravity://open?server=p1'));
   });
 
   testWidgets('rejecting the host key does not connect', (tester) async {

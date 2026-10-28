@@ -1,10 +1,17 @@
 import 'dart:convert';
 
-/// Where the server should post when a run ends (see ServerProfile.ntfyUrl).
-class NtfyPing {
-  const NtfyPing(this.url, this.workspaceName);
-  final String url;
+/// What the server does when a run ends: post to ntfy (if [ntfyUrl] is set)
+/// and ask the push relay to notify every registered device (FCM). [link]
+/// opens the conversation in the app. Only the workspace name and outcome are sent,
+/// never prompt or reply content.
+class RunNotify {
+  const RunNotify({required this.workspaceName, required this.link, this.ntfyUrl});
   final String workspaceName;
+  final String link;
+  final String? ntfyUrl;
+
+  String get doneMessage => 'Agent finished in $workspaceName';
+  String get failedMessage => 'Agent stopped with an error in $workspaceName';
 }
 
 /// Marker the run-follow script writes to stderr once the agent exits.
@@ -47,6 +54,12 @@ abstract class RemoteScripts {
 
   String clearApiKey();
 
+  /// Adds (or removes) the `relayUrl<TAB>pushKey` line sent on stdin to the
+  /// server's list of devices to notify. Push keys stay off command lines.
+  String pushRegister();
+
+  String pushUnregister();
+
   String writeAgySettings(String json);
 
   /// Lists [path]: first line is the resolved absolute path, then one
@@ -72,7 +85,7 @@ abstract class RemoteScripts {
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
-    NtfyPing? notify,
+    RunNotify? notify,
   });
 
   /// Follows a detached run from byte [offset]; stdout carries the agent
@@ -257,11 +270,11 @@ head -c $maxBytes -- "\$F" | base64
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
-    NtfyPing? notify,
+    RunNotify? notify,
   }) {
     final f = '$_runDir/$runId';
     final args = agyArgs.map(quote).join(' ');
-    final ping = notify == null ? '' : _ntfy(notify);
+    final ping = notify == null ? '' : _afterRun(notify);
     final inner = '''
 agy -p "\$(cat "$f.prompt")" --output-format stream-json $args < /dev/null > "$f.out" 2> "$f.err" &
 A=\$!
@@ -284,19 +297,59 @@ echo "started=$runId"
 ''');
   }
 
-  /// Posts to ntfy after the run; only the workspace name and outcome are
-  /// sent, never prompt or reply content.
-  String _ntfy(NtfyPing n) {
-    final ok = quote('Agent finished in ${n.workspaceName}');
-    final failed = quote('Agent stopped with an error in ${n.workspaceName}');
-    final url = quote(n.url);
-    return '''
-if [ "\$C" = 0 ]; then M=$ok; else M=$failed; fi
-if command -v curl >/dev/null 2>&1; then curl -fsS -m 15 -H "Title: Antigravity" -H "Tags: robot" -d "\$M" $url >/dev/null 2>&1
-elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O /dev/null --header="Title: Antigravity" --post-data="\$M" $url
+  static const _pushFile = r'$HOME/.antigravity-mobile/push';
+
+  String _afterRun(RunNotify n) {
+    final out = StringBuffer(
+        'if [ "\$C" = 0 ]; then M=${quote(n.doneMessage)}; else M=${quote(n.failedMessage)}; fi\n');
+    final url = n.ntfyUrl;
+    if (url != null && url.isNotEmpty) {
+      final click = quote('Click: ${n.link}');
+      out.write('''
+if command -v curl >/dev/null 2>&1; then curl -fsS -m 15 -H "Title: Antigravity" -H "Tags: robot" -H $click -d "\$M" ${quote(url)} >/dev/null 2>&1
+elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O /dev/null --header="Title: Antigravity" --header=$click --post-data="\$M" ${quote(url)}
 fi
-''';
+''');
+    }
+    // Push relay: one `url<TAB>key` line per registered phone. The JSON is
+    // built here; only the URL-safe key is substituted on the server.
+    String body(String title) => jsonEncode(
+        {'key': '__KEY__', 'title': title, 'body': 'Tap to see the reply.', 'link': n.link});
+    out.write('''
+if [ "\$C" = 0 ]; then J=${quote(body(n.doneMessage))}; else J=${quote(body(n.failedMessage))}; fi
+if [ -s "$_pushFile" ] && command -v curl >/dev/null 2>&1; then
+  while IFS="\$(printf '\\t')" read -r U K; do
+    case "\$K" in ''|*[!A-Za-z0-9._-]*) continue;; esac
+    printf '%s' "\$J" | sed "s/__KEY__/\$K/" | curl -fsS -m 15 -H "Content-Type: application/json" --data-binary @- "\$U/send" >/dev/null 2>&1
+  done < "$_pushFile"
+fi
+''');
+    return out.toString();
   }
+
+  @override
+  String pushRegister() => wrap('''
+umask 077
+mkdir -p "\$HOME/.antigravity-mobile"
+L=\$(cat)
+[ -n "\$L" ] || exit 2
+touch "$_pushFile"
+K=\$(printf '%s' "\$L" | cut -f2)
+{ grep -vF "\$K" "$_pushFile"; printf '%s\\n' "\$L"; } | tail -n 10 > "$_pushFile.new"
+mv "$_pushFile.new" "$_pushFile"
+chmod 600 "$_pushFile"
+''');
+
+  @override
+  String pushUnregister() => wrap('''
+umask 077
+L=\$(cat)
+[ -f "$_pushFile" ] || exit 0
+K=\$(printf '%s' "\$L" | cut -f2)
+grep -vF "\$K" "$_pushFile" > "$_pushFile.new"
+mv "$_pushFile.new" "$_pushFile"
+chmod 600 "$_pushFile"
+''');
 
   @override
   String followRun(String runId, int offset) {
@@ -556,7 +609,7 @@ exit 0
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
-    NtfyPing? notify,
+    RunNotify? notify,
   }) =>
       wrap('''
 ${_env()}
@@ -570,15 +623,57 @@ if (Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) {
 \$prompt = ${_decode(msvcEscape(prompt))}
 & agy -p \$prompt --output-format stream-json ${agyArgs.map(quote).join(' ')}
 \$code = \$LASTEXITCODE
-${notify == null ? '' : _ntfy(notify)}
+${notify == null ? '' : _afterRun(notify)}
 [Console]::Error.WriteLine("$exitMarker\$code")
 exit \$code
 ''');
 
-  String _ntfy(NtfyPing n) => '''
-\$m = if (\$code -eq 0) { ${quote('Agent finished in ${n.workspaceName}')} } else { ${quote('Agent stopped with an error in ${n.workspaceName}')} }
-try { Invoke-RestMethod -Method Post -Uri ${quote(n.url)} -Headers @{ Title = "Antigravity"; Tags = "robot" } -Body \$m -TimeoutSec 15 | Out-Null } catch {}
-''';
+  static const _pushFile = r'$env:USERPROFILE\.antigravity-mobile\push';
+
+  String _afterRun(RunNotify n) {
+    final out = StringBuffer('''
+\$m = if (\$code -eq 0) { ${quote(n.doneMessage)} } else { ${quote(n.failedMessage)} }
+''');
+    final url = n.ntfyUrl;
+    if (url != null && url.isNotEmpty) {
+      out.write('''
+try { Invoke-RestMethod -Method Post -Uri ${quote(url)} -Headers @{ Title = "Antigravity"; Tags = "robot"; Click = ${quote(n.link)} } -Body \$m -TimeoutSec 15 | Out-Null } catch {}
+''');
+    }
+    out.write('''
+\$pf = "$_pushFile"
+if (Test-Path -LiteralPath \$pf) {
+  foreach (\$line in Get-Content -LiteralPath \$pf) {
+    \$parts = \$line -split "`t"
+    if (\$parts.Length -lt 2) { continue }
+    \$payload = @{ key = \$parts[1]; title = \$m; body = "Tap to see the reply."; link = ${quote(n.link)} } | ConvertTo-Json -Compress
+    try { Invoke-RestMethod -Method Post -Uri "\$(\$parts[0])/send" -ContentType "application/json" -Body \$payload -TimeoutSec 15 | Out-Null } catch {}
+  }
+}
+''');
+    return out.toString();
+  }
+
+  @override
+  String pushRegister() => wrap('''
+\$l = [Console]::In.ReadToEnd().Trim()
+if (-not \$l) { exit 2 }
+\$d = "\$env:USERPROFILE\\.antigravity-mobile"
+New-Item -ItemType Directory -Force -Path \$d | Out-Null
+\$k = (\$l -split "`t")[1]
+\$lines = @()
+if (Test-Path -LiteralPath "$_pushFile") { \$lines = @(Get-Content -LiteralPath "$_pushFile" | Where-Object { \$_ -and -not \$_.Contains(\$k) }) }
+\$lines = @(\$lines + \$l) | Select-Object -Last 10
+Set-Content -LiteralPath "$_pushFile" -Value \$lines
+''');
+
+  @override
+  String pushUnregister() => wrap('''
+\$l = [Console]::In.ReadToEnd().Trim()
+if (-not (Test-Path -LiteralPath "$_pushFile")) { exit 0 }
+\$k = (\$l -split "`t")[1]
+Set-Content -LiteralPath "$_pushFile" -Value @(Get-Content -LiteralPath "$_pushFile" | Where-Object { \$_ -and -not \$_.Contains(\$k) })
+''');
 
   @override
   String followRun(String runId, int offset) =>

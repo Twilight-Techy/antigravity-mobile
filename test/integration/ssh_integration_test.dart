@@ -4,6 +4,7 @@
 // AGM_SSH_TEST_USER@AGM_SSH_TEST_HOST:AGM_SSH_TEST_PORT, where a (fake or
 // real) `agy` lives in ~/.local/bin and ~/project is a git repo with a
 // modified readme.md and an untracked new.txt. See tool/fake_agy.sh.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:antigravity_mobile/models/conversation.dart';
@@ -175,16 +176,27 @@ and a second line ✓''';
     expect(sw.elapsed.inSeconds, lessThan(15));
   }, skip: skip);
 
-  test('the server pings ntfy when a run ends', () async {
-    // Stand-in curl that records how it was called.
-    await host.run("sh -c 'printf \"%s\\n\" \"#!/bin/sh\" \"printf \\\"%s|\\\" \\\"\\\$@\\\" > \\\$HOME/curl.log\" > \$HOME/.local/bin/curl; chmod +x \$HOME/.local/bin/curl'");
-    addTearDown(() => host.run("sh -c 'rm -f \$HOME/.local/bin/curl \$HOME/curl.log'"));
+  test('the server pings ntfy and the push relay when a run ends', () async {
+    // Stand-in curl that records its arguments and any piped body.
+    const fakeCurl = '#!/bin/sh\n'
+        '{ printf "ARGS:"; printf " %s" "\$@"; printf "\\n";\n'
+        '  case "\$*" in *@-*) printf "STDIN:"; cat; printf "\\n";; esac; } >> "\$HOME/curl.log"\n';
+    await host.runWithInput("sh -c 'cat > \$HOME/.local/bin/curl; chmod +x \$HOME/.local/bin/curl; rm -f \$HOME/curl.log'", fakeCurl);
+    addTearDown(() => host.run("sh -c 'rm -f \$HOME/.local/bin/curl \$HOME/curl.log \$HOME/.antigravity-mobile/push'"));
+
+    await agy.registerPush('https://relay.example.dev', 'key-ONE_1');
+    await agy.registerPush('https://relay.example.dev', 'key-two');
+    await agy.registerPush('https://relay.example.dev', 'key-two', remove: true);
+    final push = await host.run("sh -c 'stat -c %a \$HOME/.antigravity-mobile/push; cat \$HOME/.antigravity-mobile/push'");
+    expect(push.stdout.trim().split('\n'), ['600', 'https://relay.example.dev\tkey-ONE_1']);
+
+    const link = 'antigravity://open?server=s1&conversation=c%22q';
     final run = agy.createRun(
-      runId: 'it-ntfy-${DateTime.now().microsecondsSinceEpoch}',
+      runId: 'it-notify-${DateTime.now().microsecondsSinceEpoch}',
       cwd: '~/project',
       prompt: 'hi',
       agyArgs: const [],
-      notify: const NtfyPing('https://ntfy.sh/agm-test', 'project'),
+      notify: const RunNotify(workspaceName: 'my "proj"', link: link, ntfyUrl: 'https://ntfy.sh/agm-test'),
     );
     RunEvent? last;
     final done = run.events.forEach((e) => last = e);
@@ -192,13 +204,22 @@ and a second line ✓''';
     await done;
     expect((last as RunExit).code, 0);
     String log = '';
-    for (var i = 0; i < 20 && log.isEmpty; i++) {
+    for (var i = 0; i < 25 && !log.contains('STDIN:'); i++) {
       log = (await host.run("sh -c 'cat \$HOME/curl.log 2>/dev/null'")).stdout;
-      if (log.isEmpty) await Future.delayed(const Duration(milliseconds: 200));
+      if (!log.contains('STDIN:')) await Future.delayed(const Duration(milliseconds: 200));
     }
+    // ntfy: message plus a click link that opens the conversation.
     expect(log, contains('https://ntfy.sh/agm-test'));
-    expect(log, contains('Agent finished in project'));
-    expect(log, isNot(contains('hi|')), reason: 'the prompt is never sent');
+    expect(log, contains('Click: $link'));
+    expect(log, contains('Agent finished in my "proj"'));
+    // Relay: valid JSON with this phone's key.
+    expect(log, contains('https://relay.example.dev/send'));
+    final body = log.split('\n').firstWhere((l) => l.startsWith('STDIN:')).substring(6);
+    final json = jsonDecode(body) as Map;
+    expect(json['key'], 'key-ONE_1');
+    expect(json['title'], 'Agent finished in my "proj"');
+    expect(json['link'], link);
+    expect(log, isNot(contains(' hi ')), reason: 'the prompt is never sent');
   }, skip: skip);
 
   test('stores the API key via stdin in a private file', () async {

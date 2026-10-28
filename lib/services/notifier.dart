@@ -8,7 +8,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 /// Tells the user when the agent finishes while the app is in the
 /// background, and keeps the app alive while an agent run is in progress.
 abstract class Notifier {
-  /// Conversation ids from tapped notifications.
+  /// `antigravity://` links from tapped notifications.
   Stream<String> get taps;
 
   Future<void> init();
@@ -24,7 +24,7 @@ abstract class Notifier {
   Future<void> releaseKeepAlive();
 
   Future<void> agentFinished({
-    required String conversationId,
+    required String link,
     required String title,
     required String body,
   });
@@ -158,7 +158,7 @@ class LocalNotifier implements Notifier {
 
   @override
   Future<void> agentFinished({
-    required String conversationId,
+    required String link,
     required String title,
     required String body,
   }) async {
@@ -172,7 +172,7 @@ class LocalNotifier implements Notifier {
           android: _doneChannel,
           iOS: DarwinNotificationDetails(presentAlert: true, presentSound: true),
         ),
-        payload: conversationId,
+        payload: link,
       );
     } catch (e) {
       debugPrint('Could not show notification: $e');
@@ -183,11 +183,11 @@ class LocalNotifier implements Notifier {
 /// Used where notifications are unavailable, and in tests.
 class SilentNotifier implements Notifier {
   final _taps = StreamController<String>.broadcast();
-  final shown = <(String title, String body, String conversationId)>[];
+  final shown = <(String title, String body, String link)>[];
   bool keptAlive = false;
   int permissionRequests = 0;
 
-  void tap(String conversationId) => _taps.add(conversationId);
+  void tap(String link) => _taps.add(link);
 
   @override
   Stream<String> get taps => _taps.stream;
@@ -206,9 +206,9 @@ class SilentNotifier implements Notifier {
 
   @override
   Future<void> agentFinished({
-    required String conversationId,
+    required String link,
     required String title,
     required String body,
   }) async =>
-      shown.add((title, body, conversationId));
+      shown.add((title, body, link));
 }

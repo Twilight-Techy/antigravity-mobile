@@ -6,7 +6,9 @@ import 'package:provider/provider.dart';
 import '../../models/conversation.dart';
 import '../../models/server_profile.dart';
 import '../../services/agy_service.dart';
+import '../../services/links.dart';
 import '../../services/notifier.dart';
+import '../../services/push_service.dart';
 import '../../state/chat_controller.dart';
 import '../../state/servers_state.dart';
 import '../../state/session_state.dart';
@@ -20,10 +22,13 @@ import 'workspace_picker.dart';
 
 /// Owns one connection to [profile] and everything built on top of it.
 class SessionScreen extends StatelessWidget {
-  const SessionScreen({super.key, required this.profile, this.connector});
+  const SessionScreen({super.key, required this.profile, this.connector, this.openConversationId});
 
   final ServerProfile profile;
   final HostConnector? connector;
+
+  /// Conversation to open once connected (from a notification or link).
+  final String? openConversationId;
 
   @override
   Widget build(BuildContext context) {
@@ -34,18 +39,21 @@ class SessionScreen extends StatelessWidget {
             servers: context.read<ServersState>(),
             profile: profile,
             connector: connector ?? context.read<HostConnector>(),
+            push: context.read<PushService>(),
           ),
         ),
         ChangeNotifierProvider(create: (context) => ChatController(context.read<SessionState>())),
         ChangeNotifierProvider(create: (context) => TerminalSession(context.read<SessionState>())),
       ],
-      child: const _SessionBody(),
+      child: _SessionBody(openConversationId: openConversationId),
     );
   }
 }
 
 class _SessionBody extends StatefulWidget {
-  const _SessionBody();
+  const _SessionBody({this.openConversationId});
+
+  final String? openConversationId;
 
   @override
   State<_SessionBody> createState() => _SessionBodyState();
@@ -60,7 +68,12 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
 
   late final ChatController _chat;
   late final Notifier _notifier;
-  StreamSubscription<String>? _taps;
+  late final OpenRequests _requests;
+  late final SessionState _session;
+  final _home = GlobalKey<WorkspaceHomeState>();
+
+  /// Workspace to open once setup is done, for a requested conversation.
+  String? _pendingWorkspace;
   bool _background = false;
   bool _askedPermission = false;
 
@@ -74,14 +87,19 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
     _chat = context.read<ChatController>()
       ..onPromptSent = _onPromptSent
       ..onReplyFinished = _onReplyFinished;
-    _taps = _notifier.taps.listen(_onNotificationTap);
+    _session = session;
+    _requests = context.read<OpenRequests>()..handler = _handleRequest;
+    session.addListener(_openPendingWorkspace);
+    final initial = widget.openConversationId;
+    if (initial != null) unawaited(_openConversation(initial));
     WidgetsBinding.instance.addPostFrameCallback((_) => session.connect());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _taps?.cancel();
+    if (_requests.handler == _handleRequest) _requests.handler = null;
+    _session.removeListener(_openPendingWorkspace);
     _chat
       ..onPromptSent = null
       ..onReplyFinished = null;
@@ -121,7 +139,8 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
     unawaited(_notifier.releaseKeepAlive());
     final profile = context.read<SessionState>().profile;
     // With ntfy the server sends the push itself; avoid a duplicate.
-    final serverPushes = profile.ntfyUrl != null && profile.ntfyUrl!.isNotEmpty;
+    final serverPushes = (profile.ntfyUrl != null && profile.ntfyUrl!.isNotEmpty) ||
+        context.read<SessionState>().pushRegistered;
     if (!_background || !profile.notifyOnFinish || serverPushes) return;
     if (reply.status == MessageStatus.cancelled) return;
     final ws = workspaceName(conversation.workspace);
@@ -132,19 +151,42 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
     body = body.replaceAll(RegExp(r'[#*`>_]+'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
     if (body.length > 140) body = '${body.substring(0, 140)}…';
     unawaited(_notifier.agentFinished(
-      conversationId: conversation.id,
+      link: OpenRequest(profile.id, conversation.id).toUri().toString(),
       title: failed ? 'Agent hit an error in $ws' : 'Agent finished in $ws',
       body: body.isEmpty ? conversation.title : body,
     ));
   }
 
-  Future<void> _onNotificationTap(String conversationId) async {
-    final session = context.read<SessionState>();
-    final convo = await session.storage.loadConversation(conversationId);
-    if (convo == null || convo.serverId != session.profile.id) return;
-    if (convo.workspace == session.workspace) {
-      await _chat.open(conversationId);
-      if (mounted) WorkspaceHomeState.of(context)?.showTab(0);
+  bool _handleRequest(OpenRequest request) {
+    if (request.serverId != _session.profile.id) return false;
+    unawaited(_openConversation(request.conversationId));
+    return true;
+  }
+
+  Future<void> _openConversation(String id) async {
+    final convo = await _session.storage.loadConversation(id);
+    if (convo == null || convo.serverId != _session.profile.id || !mounted) return;
+    if (convo.workspace == _session.workspace) {
+      await _chat.open(id);
+      _home.currentState?.showTab(0);
+    } else if (!_chat.busy) {
+      _chat.pendingConversationId = id;
+      if (_session.setupDone && _session.workspace == null) {
+        _session.openWorkspace(convo.workspace);
+      } else if (_session.setupDone) {
+        await context.read<TerminalSession>().stop();
+        _session.openWorkspace(convo.workspace);
+      } else {
+        _pendingWorkspace = convo.workspace;
+      }
+    }
+  }
+
+  void _openPendingWorkspace() {
+    final ws = _pendingWorkspace;
+    if (ws != null && _session.setupDone && _session.workspace == null) {
+      _pendingWorkspace = null;
+      _session.openWorkspace(ws);
     }
   }
 
@@ -224,7 +266,7 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
       body = const WorkspacePicker();
     } else {
       _inSetup = false;
-      body = const WorkspaceHome();
+      body = WorkspaceHome(key: _home);
     }
     return AnimatedSwitcher(duration: const Duration(milliseconds: 200), child: body);
   }

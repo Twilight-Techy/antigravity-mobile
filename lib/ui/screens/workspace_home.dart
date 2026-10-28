@@ -38,7 +38,9 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
   Widget build(BuildContext context) {
     final session = context.watch<SessionState>();
     final chat = context.watch<ChatController>();
-    final ws = session.workspace!;
+    final ws = session.workspace;
+    // Still on screen for a moment while switching away from the workspace.
+    if (ws == null) return const Scaffold();
     final connected = session.isConnected;
     final busy = chat.busy;
 

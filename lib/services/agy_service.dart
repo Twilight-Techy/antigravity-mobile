@@ -335,6 +335,13 @@ class AgyService {
     await writeSettings(settings);
   }
 
+  /// Stores (or removes) a push-relay key on the server; sent over stdin.
+  Future<void> registerPush(String relayUrl, String key, {bool remove = false}) async {
+    final r = await host.runWithInput(
+        remove ? scripts.pushUnregister() : scripts.pushRegister(), '$relayUrl\t$key');
+    if (!r.ok) throw RemoteCommandException('Could not save the push registration.', r);
+  }
+
   Future<DirListing> listDir(String path) async {
     final r = await host.run(scripts.listDir(path), timeout: const Duration(seconds: 30));
     if (!r.ok) throw RemoteCommandException('Could not open $path', r);
@@ -411,7 +418,7 @@ class AgyService {
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
-    NtfyPing? notify,
+    RunNotify? notify,
   }) =>
       AgentRun(
         service: this,
@@ -461,7 +468,7 @@ class AgentRun {
   });
 
   final AgyService service;
-  final NtfyPing? notify;
+  final RunNotify? notify;
   final String runId;
   final String cwd;
   final String prompt;

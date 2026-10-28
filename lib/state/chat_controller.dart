@@ -7,6 +7,7 @@ import '../models/agent_options.dart';
 import '../models/conversation.dart';
 import '../services/agent_stream_parser.dart';
 import '../services/agy_service.dart';
+import '../services/links.dart';
 import '../services/message_builder.dart';
 import '../services/remote_scripts.dart';
 import '../services/storage_service.dart';
@@ -56,6 +57,10 @@ class ChatController extends ChangeNotifier {
   /// Called when a reply finishes (done, error or cancelled).
   void Function(Conversation conversation, ChatMessage reply)? onReplyFinished;
 
+  /// Conversation to open instead of the most recent one when the next
+  /// workspace loads (from a notification tap).
+  String? pendingConversationId;
+
   /// Called when a prompt is sent.
   VoidCallback? onPromptSent;
 
@@ -83,7 +88,11 @@ class ChatController extends ChangeNotifier {
     if (ws == null || ws == _loadedWorkspace) return;
     _loadedWorkspace = ws;
     await _refreshIndex();
-    if (_conversations.isNotEmpty) {
+    final requested = pendingConversationId;
+    pendingConversationId = null;
+    if (requested != null && _conversations.any((c) => c.id == requested)) {
+      await open(requested);
+    } else if (_conversations.isNotEmpty) {
       await open(_conversations.first.id);
     } else {
       newConversation();
@@ -180,7 +189,13 @@ class ChatController extends ChangeNotifier {
       cwd: convo.workspace,
       prompt: prompt,
       agyArgs: args,
-      notify: ntfy == null || ntfy.isEmpty ? null : NtfyPing(ntfy, workspaceName(convo.workspace)),
+      notify: session.profile.notifyOnFinish || (ntfy != null && ntfy.isNotEmpty)
+          ? RunNotify(
+              workspaceName: workspaceName(convo.workspace),
+              link: OpenRequest(session.profile.id, convo.id).toUri().toString(),
+              ntfyUrl: ntfy == null || ntfy.isEmpty ? null : ntfy,
+            )
+          : null,
     );
     _attach(run, reply);
     unawaited(run.start());

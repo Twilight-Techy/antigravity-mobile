@@ -27,13 +27,14 @@ class _ChangesViewState extends State<ChangesView> {
   Future<void> _load() async {
     final session = context.read<SessionState>();
     final agy = session.agy;
-    if (agy == null || !session.isConnected) return;
+    final ws = session.workspace;
+    if (agy == null || ws == null || !session.isConnected) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final status = await agy.gitStatus(session.workspace!);
+      final status = await agy.gitStatus(ws);
       if (!mounted) return;
       setState(() {
         _status = status;

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/server_profile.dart';
 import '../services/agy_service.dart';
+import '../services/push_service.dart';
 import '../services/remote_host.dart';
 import '../services/ssh_host.dart';
 import '../services/storage_service.dart';
@@ -29,7 +30,15 @@ class SessionState extends ChangeNotifier {
     required this.servers,
     required this.profile,
     HostConnector? connector,
-  }) : _connector = connector ?? sshConnector;
+    PushService? push,
+  })  : _connector = connector ?? sshConnector,
+        _push = push ?? NoPushService();
+
+  final PushService _push;
+
+  /// True once this phone is registered for relay pushes on this server, so
+  /// local notifications can be skipped to avoid duplicates.
+  bool pushRegistered = false;
 
   final ServersState servers;
   final ServerProfile profile;
@@ -99,6 +108,7 @@ class SessionState extends ChangeNotifier {
       _agy?.host.close();
       _agy = agy;
       unawaited(host.done.then((_) => _onClosed(host), onError: (_) => _onClosed(host)));
+      unawaited(_syncPush(agy));
       profile.lastConnectedAt = DateTime.now();
       unawaited(servers.update(profile));
       _generation++;
@@ -109,6 +119,20 @@ class SessionState extends ChangeNotifier {
       _error = e.toString();
       _setStatus(ConnectionStatus.failed);
       return false;
+    }
+  }
+
+  /// Registers (or, if notifications are off, unregisters) this phone for
+  /// pushes from this server.
+  Future<void> _syncPush(AgyService agy) async {
+    if (!_push.available) return;
+    try {
+      final reg = await _push.register();
+      if (reg == null) return;
+      await agy.registerPush(reg.relayUrl, reg.key, remove: !profile.notifyOnFinish);
+      pushRegistered = profile.notifyOnFinish;
+    } catch (e) {
+      debugPrint('Push registration failed: $e');
     }
   }
 
