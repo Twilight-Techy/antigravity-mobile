@@ -15,7 +15,13 @@ over SSH.
 - **Setup checklist**: detects the OS, installs `agy` with the official
   installer (no root needed), optionally installs `tmux`, and signs in with
   Google (through the interactive TUI) or a Gemini API key.
-- **Workspaces**: browse the server, create folders, reopen recent projects.
+- **Chats grouped by project**, like the Antigravity sidebar: each project
+  folder lists its chats, newest first. Chats that belong to no project are
+  under **Other chats**. Choose a new chat's project with the project chip
+  (a recent folder, browse the server, or no project). The project is locked
+  once you send the first message, because agy ties a conversation to its
+  folder. No-project chats run in a private scratch folder
+  (`~/.antigravity-mobile/scratch`), not your whole home directory.
 - **Agent chat**
   - Each prompt runs `agy -p … --output-format stream-json`, so replies arrive
     as structured events instead of scraped terminal output.

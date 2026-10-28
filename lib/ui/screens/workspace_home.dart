@@ -11,8 +11,9 @@ import 'chat_view.dart';
 import 'files_view.dart';
 import 'terminal_view.dart';
 
-/// The main screen once a workspace is open: Chat, Files, Changes and
-/// Terminal tabs, with conversations in the drawer.
+/// One open chat: Agent, Files, Changes and Terminal tabs, all working in
+/// the chat's project folder (or its scratch folder). Back returns to the
+/// chat list.
 class WorkspaceHome extends StatefulWidget {
   const WorkspaceHome({super.key});
 
@@ -29,41 +30,34 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
   void showTab(int index) => setState(() => _tab = index);
 
   @override
-  void initState() {
-    super.initState();
-    context.read<ChatController>().loadForWorkspace();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final session = context.watch<SessionState>();
     final chat = context.watch<ChatController>();
+    final convo = chat.current;
     final ws = session.workspace;
-    // Still on screen for a moment while switching away from the workspace.
-    if (ws == null) return const Scaffold();
+    // Still on screen for a moment while switching back to the list.
+    if (convo == null || ws == null) return const Scaffold();
     final connected = session.isConnected;
     final busy = chat.busy;
+    final project = convo.project;
 
     return PopScope(
-      // Back from a workspace returns to the workspace picker rather than
-      // dropping the connection.
       canPop: false,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (didPop) return;
-        if (busy) {
-          showSnack(context, 'The agent is still working. Stop it or use Disconnect.');
-          return;
-        }
-        await context.read<TerminalSession>().stop();
-        session.closeWorkspace();
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) chat.close();
       },
       child: Scaffold(
         appBar: AppBar(
+          leading: IconButton(
+            tooltip: 'Chats',
+            onPressed: chat.close,
+            icon: const Icon(Icons.arrow_back),
+          ),
           titleSpacing: 0,
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(baseName(ws), overflow: TextOverflow.ellipsis),
+              Text(convo.messages.isEmpty ? 'New chat' : convo.title, overflow: TextOverflow.ellipsis),
               Row(
                 children: [
                   StatusDot(
@@ -72,25 +66,24 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
                         : busy
                             ? AppColors.accent
                             : AppColors.success,
-                    pulse:
-                        busy || session.status == ConnectionStatus.connecting,
+                    pulse: busy || session.status == ConnectionStatus.connecting,
                     size: 7,
                   ),
                   const SizedBox(width: 6),
+                  Icon(project == null ? Icons.chat_bubble_outline : Icons.folder_rounded,
+                      size: 12, color: AppColors.textMuted),
+                  const SizedBox(width: 4),
                   Flexible(
                     child: Text(
                       !connected
-                          ? (session.status == ConnectionStatus.connecting
-                              ? 'Reconnecting…'
-                              : 'Disconnected')
+                          ? (session.status == ConnectionStatus.connecting ? 'Reconnecting…' : 'Disconnected')
                           : busy
                               ? 'Agent working…'
-                              : session.profile.name,
+                              : project == null
+                                  ? 'No project'
+                                  : baseName(project),
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textMuted,
-                          fontWeight: FontWeight.w400),
+                      style: const TextStyle(fontSize: 12, color: AppColors.textMuted, fontWeight: FontWeight.w400),
                     ),
                   ),
                 ],
@@ -100,54 +93,16 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
           actions: [
             if (_tab == 0)
               IconButton(
-                tooltip: 'New conversation',
-                onPressed: busy ? null : chat.newConversation,
+                tooltip: 'New chat',
+                onPressed: busy ? null : () => chat.newChat(project: project),
                 icon: const Icon(Icons.add_comment_outlined),
               ),
-            PopupMenuButton<String>(
-              onSelected: (v) async {
-                switch (v) {
-                  case 'workspace':
-                    await context.read<TerminalSession>().stop();
-                    session.closeWorkspace();
-                  case 'setup':
-                    await session.reopenSetup();
-                  case 'disconnect':
-                    session.disconnect();
-                    if (context.mounted) Navigator.of(context).pop();
-                }
-              },
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: 'workspace',
-                  enabled: !busy,
-                  child: const ListTile(
-                      leading: Icon(Icons.folder_open),
-                      title: Text('Switch workspace'),
-                      dense: true),
-                ),
-                const PopupMenuItem(
-                  value: 'setup',
-                  child: ListTile(
-                      leading: Icon(Icons.build_circle_outlined),
-                      title: Text('Server setup'),
-                      dense: true),
-                ),
-                const PopupMenuItem(
-                  value: 'disconnect',
-                  child: ListTile(
-                      leading: Icon(Icons.logout),
-                      title: Text('Disconnect'),
-                      dense: true),
-                ),
-              ],
-            ),
+            ServerMenu(busy: busy),
           ],
         ),
-        drawer: const _ConversationsDrawer(),
         body: Column(
           children: [
-            if (!connected) const _ConnectionBanner(),
+            if (!connected) const ConnectionBanner(),
             Expanded(
               child: IndexedStack(
                 index: _tab,
@@ -166,21 +121,12 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
           onDestinationSelected: showTab,
           destinations: const [
             NavigationDestination(
-                icon: Icon(Icons.chat_bubble_outline),
-                selectedIcon: Icon(Icons.chat_bubble),
-                label: 'Agent'),
+                icon: Icon(Icons.chat_bubble_outline), selectedIcon: Icon(Icons.chat_bubble), label: 'Agent'),
+            NavigationDestination(icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: 'Files'),
             NavigationDestination(
-                icon: Icon(Icons.folder_outlined),
-                selectedIcon: Icon(Icons.folder),
-                label: 'Files'),
+                icon: Icon(Icons.difference_outlined), selectedIcon: Icon(Icons.difference), label: 'Changes'),
             NavigationDestination(
-                icon: Icon(Icons.difference_outlined),
-                selectedIcon: Icon(Icons.difference),
-                label: 'Changes'),
-            NavigationDestination(
-                icon: Icon(Icons.terminal_outlined),
-                selectedIcon: Icon(Icons.terminal),
-                label: 'Terminal'),
+                icon: Icon(Icons.terminal_outlined), selectedIcon: Icon(Icons.terminal), label: 'Terminal'),
           ],
         ),
       ),
@@ -188,8 +134,41 @@ class WorkspaceHomeState extends State<WorkspaceHome> {
   }
 }
 
-class _ConnectionBanner extends StatelessWidget {
-  const _ConnectionBanner();
+/// Server setup and disconnect, shared by the chat list and chat screens.
+class ServerMenu extends StatelessWidget {
+  const ServerMenu({super.key, required this.busy});
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    final session = context.read<SessionState>();
+    return PopupMenuButton<String>(
+      onSelected: (v) async {
+        switch (v) {
+          case 'setup':
+            await context.read<TerminalSession>().stop();
+            await session.reopenSetup();
+          case 'disconnect':
+            session.disconnect();
+            if (context.mounted) Navigator.of(context).pop();
+        }
+      },
+      itemBuilder: (_) => const [
+        PopupMenuItem(
+          value: 'setup',
+          child: ListTile(leading: Icon(Icons.build_circle_outlined), title: Text('Server setup'), dense: true),
+        ),
+        PopupMenuItem(
+          value: 'disconnect',
+          child: ListTile(leading: Icon(Icons.logout), title: Text('Disconnect'), dense: true),
+        ),
+      ],
+    );
+  }
+}
+
+class ConnectionBanner extends StatelessWidget {
+  const ConnectionBanner({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -207,8 +186,7 @@ class _ConnectionBanner extends StatelessWidget {
               child: Text(
                 connecting
                     ? 'Reconnecting…'
-                    : session.error ??
-                        'Connection lost. Running agent tasks continue on the server.',
+                    : session.error ?? 'Connection lost. Running agent tasks continue on the server.',
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 12.5),
@@ -217,136 +195,6 @@ class _ConnectionBanner extends StatelessWidget {
             TextButton(
               onPressed: connecting ? null : session.reconnect,
               child: const Text('Reconnect'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ConversationsDrawer extends StatelessWidget {
-  const _ConversationsDrawer();
-
-  Future<void> _rename(BuildContext context, ChatController chat, String id,
-      String title) async {
-    final controller = TextEditingController(text: title);
-    final value = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Rename conversation'),
-        content: TextField(controller: controller, autofocus: true),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text),
-              child: const Text('Save')),
-        ],
-      ),
-    );
-    if (value != null) await chat.rename(id, value);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final chat = context.watch<ChatController>();
-    final session = context.read<SessionState>();
-    final currentId = chat.current?.id;
-    return Drawer(
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Row(
-                children: [
-                  const AgLogo(size: 32),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(baseName(session.workspace ?? ''),
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w600)),
-                        Text(session.workspace ?? '',
-                            overflow: TextOverflow.ellipsis,
-                            style: monoStyle(
-                                size: 11, color: AppColors.textMuted)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: FilledButton.icon(
-                onPressed: chat.busy
-                    ? null
-                    : () {
-                        chat.newConversation();
-                        Navigator.pop(context);
-                      },
-                icon: const Icon(Icons.add),
-                label: const Text('New conversation'),
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: chat.conversations.isEmpty
-                  ? const EmptyState(
-                      icon: Icons.forum_outlined, title: 'No conversations yet')
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      itemCount: chat.conversations.length,
-                      itemBuilder: (context, i) {
-                        final c = chat.conversations[i];
-                        final selected = c.id == currentId;
-                        return ListTile(
-                          selected: selected,
-                          selectedTileColor:
-                              AppColors.accent.withValues(alpha: 0.12),
-                          selectedColor: AppColors.text,
-                          title: Text(c.title,
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
-                          subtitle: Text(
-                            c.preview.isEmpty
-                                ? timeAgo(c.updatedAt)
-                                : '${timeAgo(c.updatedAt)} · ${c.preview}',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 12, color: AppColors.textMuted),
-                          ),
-                          onTap: chat.busy && !selected
-                              ? null
-                              : () {
-                                  chat.open(c.id);
-                                  Navigator.pop(context);
-                                },
-                          trailing: PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_horiz, size: 20),
-                            onSelected: (v) {
-                              if (v == 'rename') {
-                                _rename(context, chat, c.id, c.title);
-                              } else if (v == 'delete') {
-                                chat.delete(c.id);
-                              }
-                            },
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(
-                                  value: 'rename', child: Text('Rename')),
-                              PopupMenuItem(
-                                  value: 'delete', child: Text('Delete')),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
             ),
           ],
         ),

@@ -11,6 +11,7 @@ import '../services/links.dart';
 import '../services/message_builder.dart';
 import '../services/remote_scripts.dart';
 import '../services/storage_service.dart';
+import 'chat_groups.dart';
 import 'session_state.dart';
 
 /// Last path segment, handling both separators.
@@ -19,8 +20,9 @@ String workspaceName(String path) {
   return parts.isEmpty ? path : parts.last;
 }
 
-/// Drives the chat for the session's current workspace: conversations,
-/// sending prompts as headless agy runs, streaming and resuming replies.
+/// Drives the chats on one server: the chat list (grouped by project in the
+/// UI), the open chat, sending prompts as headless agy runs, and streaming
+/// and resuming replies.
 class ChatController extends ChangeNotifier {
   ChatController(this.session) {
     _lastGeneration = session.generation;
@@ -35,12 +37,21 @@ class ChatController extends ChangeNotifier {
   final draft = TextEditingController();
 
   List<ConversationSummary> _conversations = [];
+
+  /// Every chat on this server, most recent first.
   List<ConversationSummary> get conversations => _conversations;
+
+  ChatGroups get groups => groupChats(_conversations, session.profile.recentWorkspaces);
 
   Conversation? _current;
   Conversation? get current => _current;
 
-  String? _loadedWorkspace;
+  /// Whether a chat is on screen (otherwise the chat list is).
+  bool _isOpen = false;
+  bool get isOpen => _isOpen;
+
+  /// Id of the chat whose reply is streaming, if any.
+  String? get runningConversationId => _run == null ? null : _current?.id;
 
   AgentRun? _run;
   MessageBuilder? _builder;
@@ -56,10 +67,6 @@ class ChatController extends ChangeNotifier {
 
   /// Called when a reply finishes (done, error or cancelled).
   void Function(Conversation conversation, ChatMessage reply)? onReplyFinished;
-
-  /// Conversation to open instead of the most recent one when the next
-  /// workspace loads (from a notification tap).
-  String? pendingConversationId;
 
   /// Called when a prompt is sent.
   VoidCallback? onPromptSent;
@@ -82,57 +89,72 @@ class ChatController extends ChangeNotifier {
     return null;
   }
 
-  /// Loads conversations for the session's workspace.
-  Future<void> loadForWorkspace() async {
-    final ws = session.workspace;
-    if (ws == null || ws == _loadedWorkspace) return;
-    _loadedWorkspace = ws;
-    await _refreshIndex();
-    final requested = pendingConversationId;
-    pendingConversationId = null;
-    if (requested != null && _conversations.any((c) => c.id == requested)) {
-      await open(requested);
-    } else if (_conversations.isNotEmpty) {
-      await open(_conversations.first.id);
-    } else {
-      newConversation();
-    }
-  }
+  /// Loads the chat list for this server.
+  Future<void> load() => _refreshIndex();
 
   Future<void> _refreshIndex() async {
     final all = await storage.loadConversationIndex();
-    _conversations = all
-        .where((c) =>
-            c.serverId == session.profile.id && c.workspace == session.workspace)
-        .toList();
+    _conversations = all.where((c) => c.serverId == session.profile.id).toList()
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     _notify();
   }
 
-  void newConversation() {
+  /// The folder a chat runs in.
+  String dirFor(Conversation c) => c.project ?? session.scratchDir;
+
+  /// Starts a new chat, in [project] or in no project.
+  void newChat({String? project}) {
     if (busy) return;
     _current = Conversation(
       id: _uuid.v4(),
       serverId: session.profile.id,
-      workspace: session.workspace ?? '',
-      title: 'New conversation',
+      project: project,
+      title: 'New chat',
       createdAt: DateTime.now(),
     );
+    _isOpen = true;
+    session.setWorkspace(dirFor(_current!));
     _notify();
   }
 
-  Future<void> open(String id) async {
-    if (busy) return;
-    final c = await storage.loadConversation(id);
-    if (c == null) return;
-    _current = c;
+  /// Changes the project of a chat that has no messages yet.
+  void setProject(String? project) {
+    final c = _current;
+    if (c == null || c.messages.isNotEmpty) return;
+    c.project = project;
+    if (project != null) session.touchProject(project);
+    session.setWorkspace(dirFor(c));
+    _notify();
+  }
+
+  /// Opens a saved chat. Returns false if another chat is still running.
+  Future<bool> open(String id) async {
+    if (busy && _current?.id != id) return false;
+    if (_current?.id != id) {
+      final c = await storage.loadConversation(id);
+      if (c == null) return false;
+      _current = c;
+    }
+    _isOpen = true;
+    session.setWorkspace(dirFor(_current!));
     _notify();
     unawaited(resumePending());
+    return true;
+  }
+
+  /// Back to the chat list. A running reply keeps streaming.
+  void close() {
+    _isOpen = false;
+    _notify();
   }
 
   Future<void> delete(String id) async {
     if (busy && _current?.id == id) return;
     await storage.deleteConversation(id);
-    if (_current?.id == id) newConversation();
+    if (_current?.id == id) {
+      _current = null;
+      _isOpen = false;
+    }
     await _refreshIndex();
   }
 
@@ -149,12 +171,21 @@ class ChatController extends ChangeNotifier {
     final prompt = text.trim();
     if (prompt.isEmpty || busy) return false;
     if (prompt == '/clear' || prompt == '/new') {
-      newConversation();
+      newChat(project: _current?.project);
       return true;
     }
     final agy = session.agy;
     final convo = _current;
     if (agy == null || convo == null || !session.isConnected) return false;
+    if (convo.project == null) {
+      try {
+        await session.ensureScratchDir();
+      } catch (_) {
+        return false;
+      }
+    } else if (convo.messages.isEmpty) {
+      session.touchProject(convo.project!);
+    }
 
     final now = DateTime.now();
     convo.messages.add(ChatMessage(
@@ -188,12 +219,12 @@ class ChatController extends ChangeNotifier {
     final ntfy = session.pushRegistered ? null : session.profile.ntfyUrl;
     final run = agy.createRun(
       runId: reply.runId!,
-      cwd: convo.workspace,
+      cwd: dirFor(convo),
       prompt: prompt,
       agyArgs: args,
       notify: session.profile.notifyOnFinish || (ntfy != null && ntfy.isNotEmpty)
           ? RunNotify(
-              workspaceName: workspaceName(convo.workspace),
+              workspaceName: convo.project == null ? 'a chat' : workspaceName(convo.project!),
               link: OpenRequest(session.profile.id, convo.id).toUri().toString(),
               ntfyUrl: ntfy == null || ntfy.isEmpty ? null : ntfy,
             )
@@ -239,7 +270,7 @@ class ChatController extends ChangeNotifier {
     if (pending == null) return;
     final run = agy.createRun(
       runId: pending.runId!,
-      cwd: convo.workspace,
+      cwd: dirFor(convo),
       prompt: '',
       agyArgs: const [],
     );
@@ -334,9 +365,10 @@ class ChatController extends ChangeNotifier {
         run.detach();
       }
       Future.delayed(const Duration(milliseconds: 300), resumePending);
-    }
-    if (session.workspace != null && session.workspace != _loadedWorkspace) {
-      unawaited(loadForWorkspace());
+      if (_conversations.isEmpty) unawaited(load());
+      // The scratch folder path is only known once connected.
+      final c = _current;
+      if (c != null && _isOpen) session.setWorkspace(dirFor(c));
     }
   }
 

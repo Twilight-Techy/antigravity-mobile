@@ -135,13 +135,15 @@ class ChatMessage {
       );
 }
 
-/// A chat thread tied to one server + workspace. [agyConversationId] is the
+/// A chat thread on one server, optionally inside a project folder
+/// ([project] is null for chats that belong to no project; those run in a
+/// private scratch folder). [agyConversationId] is the
 /// id agy reports so follow-up prompts continue the same conversation.
 class Conversation {
   Conversation({
     required this.id,
     required this.serverId,
-    required this.workspace,
+    this.project,
     required this.title,
     required this.createdAt,
     DateTime? updatedAt,
@@ -152,7 +154,9 @@ class Conversation {
 
   final String id;
   final String serverId;
-  final String workspace;
+  /// Absolute project folder, or null for "no project". Fixed once the
+  /// first message is sent, since agy ties a conversation to its folder.
+  String? project;
   String title;
   final DateTime createdAt;
   DateTime updatedAt;
@@ -162,7 +166,7 @@ class Conversation {
   Map<String, dynamic> toJson() => {
         'id': id,
         'serverId': serverId,
-        'workspace': workspace,
+        if (project != null) 'workspace': project,
         'title': title,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
@@ -173,7 +177,7 @@ class Conversation {
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
         id: json['id'] as String,
         serverId: json['serverId'] as String,
-        workspace: json['workspace'] as String,
+        project: _projectOf(json['workspace']),
         title: json['title'] as String? ?? 'Conversation',
         createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
             DateTime.now(),
@@ -184,3 +188,5 @@ class Conversation {
             .toList(),
       );
 }
+
+String? _projectOf(Object? v) => v is String && v.isNotEmpty ? v : null;

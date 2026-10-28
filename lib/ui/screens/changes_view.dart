@@ -23,6 +23,7 @@ class _ChangesViewState extends State<ChangesView> {
   String? _error;
   int _seenRuns = -1;
   int _seenGeneration = -1;
+  String? _seenWorkspace;
 
   Future<void> _load() async {
     final session = context.read<SessionState>();
@@ -57,7 +58,14 @@ class _ChangesViewState extends State<ChangesView> {
   Widget build(BuildContext context) {
     final runs = context.select<ChatController, int>((c) => c.completedRuns);
     final session = context.watch<SessionState>();
-    if ((runs != _seenRuns || session.generation != _seenGeneration) && session.isConnected) {
+    if ((runs != _seenRuns || session.generation != _seenGeneration || session.workspace != _seenWorkspace) &&
+        session.isConnected) {
+      if (session.workspace != _seenWorkspace) {
+        _status = null;
+        _notRepo = false;
+        _error = null;
+      }
+      _seenWorkspace = session.workspace;
       _seenRuns = runs;
       _seenGeneration = session.generation;
       WidgetsBinding.instance.addPostFrameCallback((_) => _load());

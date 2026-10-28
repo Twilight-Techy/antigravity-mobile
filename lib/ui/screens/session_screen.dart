@@ -17,8 +17,8 @@ import '../theme/app_theme.dart';
 import '../widgets/common.dart';
 import 'server_form_screen.dart';
 import 'setup_view.dart';
+import 'chats_home.dart';
 import 'workspace_home.dart';
-import 'workspace_picker.dart';
 
 /// Owns one connection to [profile] and everything built on top of it.
 class SessionScreen extends StatelessWidget {
@@ -71,9 +71,6 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
   late final OpenRequests _requests;
   late final SessionState _session;
   final _home = GlobalKey<WorkspaceHomeState>();
-
-  /// Workspace to open once setup is done, for a requested conversation.
-  String? _pendingWorkspace;
   bool _background = false;
   bool _askedPermission = false;
 
@@ -89,7 +86,6 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
       ..onReplyFinished = _onReplyFinished;
     _session = session;
     _requests = context.read<OpenRequests>()..handler = _handleRequest;
-    session.addListener(_openPendingWorkspace);
     final initial = widget.openConversationId;
     if (initial != null) unawaited(_openConversation(initial));
     WidgetsBinding.instance.addPostFrameCallback((_) => session.connect());
@@ -99,7 +95,6 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     if (_requests.handler == _handleRequest) _requests.handler = null;
-    _session.removeListener(_openPendingWorkspace);
     _chat
       ..onPromptSent = null
       ..onReplyFinished = null;
@@ -143,7 +138,7 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
         context.read<SessionState>().pushRegistered;
     if (!_background || !profile.notifyOnFinish || serverPushes) return;
     if (reply.status == MessageStatus.cancelled) return;
-    final ws = workspaceName(conversation.workspace);
+    final ws = conversation.project == null ? 'your chat' : workspaceName(conversation.project!);
     final failed = reply.status == MessageStatus.error;
     var body = failed
         ? reply.parts.lastWhere((p) => p.kind == PartKind.error, orElse: () => MessagePart(kind: PartKind.error)).text
@@ -166,27 +161,10 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
   Future<void> _openConversation(String id) async {
     final convo = await _session.storage.loadConversation(id);
     if (convo == null || convo.serverId != _session.profile.id || !mounted) return;
-    if (convo.workspace == _session.workspace) {
-      await _chat.open(id);
+    if (await _chat.open(id)) {
       _home.currentState?.showTab(0);
-    } else if (!_chat.busy) {
-      _chat.pendingConversationId = id;
-      if (_session.setupDone && _session.workspace == null) {
-        _session.openWorkspace(convo.workspace);
-      } else if (_session.setupDone) {
-        await context.read<TerminalSession>().stop();
-        _session.openWorkspace(convo.workspace);
-      } else {
-        _pendingWorkspace = convo.workspace;
-      }
-    }
-  }
-
-  void _openPendingWorkspace() {
-    final ws = _pendingWorkspace;
-    if (ws != null && _session.setupDone && _session.workspace == null) {
-      _pendingWorkspace = null;
-      _session.openWorkspace(ws);
+    } else if (mounted) {
+      showSnack(context, 'Another chat is still running. Stop it to open this one.');
     }
   }
 
@@ -261,9 +239,9 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
         _inSetup = true;
         body = const SetupView();
       }
-    } else if (session.workspace == null) {
+    } else if (!context.watch<ChatController>().isOpen) {
       _inSetup = false;
-      body = const WorkspacePicker();
+      body = const ChatsHome();
     } else {
       _inSetup = false;
       body = WorkspaceHome(key: _home);

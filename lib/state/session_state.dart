@@ -24,7 +24,9 @@ Future<RemoteHost> sshConnector(
         ServerProfile profile, ServerSecrets secrets, HostKeyVerifier verify) =>
     SshHost.connect(profile: profile, secrets: secrets, verifyHostKey: verify);
 
-/// One live connection to a server and the workspace chosen on it.
+/// One live connection to a server. [workspace] is the folder of the chat
+/// that is open (its project, or the scratch folder for chats with none),
+/// which the Files, Changes and Terminal tabs work in.
 class SessionState extends ChangeNotifier {
   SessionState({
     required this.servers,
@@ -237,16 +239,42 @@ class SessionState extends ChangeNotifier {
     await checkAuth();
   }
 
-  void openWorkspace(String path) {
+  /// Sets the folder the open chat works in.
+  void setWorkspace(String? path) {
+    if (_workspace == path) return;
     _workspace = path;
+    _notify();
+  }
+
+  /// Moves [path] to the top of the recent projects.
+  void touchProject(String path) {
     profile.touchWorkspace(path);
     unawaited(servers.update(profile));
     _notify();
   }
 
-  void closeWorkspace() {
-    _workspace = null;
+  void forgetProject(String path) {
+    profile.recentWorkspaces.remove(path);
+    unawaited(servers.update(profile));
     _notify();
+  }
+
+  /// Where chats that belong to no project run: a private folder, so the
+  /// agent is not pointed at the whole home directory.
+  String get scratchDir {
+    final agy = _agy;
+    if (agy == null) return '~/.antigravity-mobile/scratch';
+    final base = agy.scripts.joinPath(agy.info.home, '.antigravity-mobile');
+    return agy.scripts.joinPath(base, 'scratch');
+  }
+
+  bool _scratchReady = false;
+
+  Future<void> ensureScratchDir() async {
+    final agy = _agy;
+    if (_scratchReady || agy == null) return;
+    await agy.makeDir(scratchDir);
+    _scratchReady = true;
   }
 
   void disconnect() {

@@ -70,16 +70,18 @@ void main() {
     await settle(tester, 30);
   }
 
-  testWidgets('add a server, pick a workspace, chat, review changes', (tester) async {
+  testWidgets('add a server, open a project, chat, review changes, group chats', (tester) async {
     await addServerAndConnect(tester);
 
     // agy is installed and signed in, so setup is skipped.
-    expect(find.text('Open a workspace'), findsOneWidget);
+    expect(find.text('No chats yet'), findsOneWidget);
+    await tester.tap(find.text('Open a folder'));
+    await settle(tester, 20);
     expect(find.text('project'), findsOneWidget);
     expect(find.text('.cache'), findsNothing, reason: 'hidden folders are hidden by default');
     await tester.tap(find.text('project'));
     await settle(tester);
-    await tester.tap(find.text('Open project'));
+    await tester.tap(find.text('Use project'));
     await settle(tester, 30);
 
     expect(find.text('What should we build in project?'), findsOneWidget);
@@ -89,15 +91,17 @@ void main() {
     await tester.tap(find.byTooltip('Send'));
     await settle(tester, 40);
 
-    expect(find.text('What is this project?'), findsOneWidget);
+    expect(find.text('What is this project?'), findsWidgets);
     expect(find.textContaining('Sure! Looking at the project.'), findsOneWidget);
     expect(find.textContaining('run command'), findsOneWidget);
     expect(find.textContaining('Flutter'), findsWidgets);
 
-    // The prompt went out via the detached-run script with agy's flags.
+    // The prompt went out via the detached-run script with agy's flags, in
+    // the project folder.
     final start = host.commands.firstWhere((c) => c.contains('started='));
     expect(start, contains('--output-format stream-json'));
     expect(start, contains('accept-edits'));
+    expect(start, contains('/home/dev/project'));
 
     // Follow-up continues the same agy conversation.
     await tester.enterText(find.byType(TextField).last, 'And the tests?');
@@ -119,16 +123,51 @@ void main() {
     await tester.pageBack();
     await settle(tester);
 
-    // Files tab lists the workspace and opens a file.
+    // Files tab lists the project and opens a file.
     await tester.tap(find.text('Files'));
     await settle(tester, 20);
     expect(find.text('pubspec.yaml'), findsOneWidget);
 
-    // Back from the workspace returns to the picker, still connected.
+    // Back returns to the chat list, grouped by project, still connected.
     await tester.binding.handlePopRoute();
     await settle(tester);
-    expect(find.text('Open a workspace'), findsOneWidget);
+    expect(find.text('PROJECTS'), findsOneWidget);
+    expect(find.text('project'), findsOneWidget);
+    expect(find.text('What is this project?'), findsOneWidget);
+    expect(find.text('Other chats'), findsNothing);
     expect(host.isClosed, isFalse);
+
+    // A chat in no project runs in the private scratch folder.
+    await tester.tap(find.text('New chat'));
+    await settle(tester, 20);
+    expect(find.text('What can I help with?'), findsOneWidget);
+    expect(find.text('No project'), findsWidgets);
+    await tester.enterText(find.byType(TextField).last, 'Hello there');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await settle(tester, 40);
+    final scratch = host.commands.lastWhere((c) => c.contains('started='));
+    expect(scratch, contains('/home/dev/.antigravity-mobile/scratch'));
+    expect(host.commands.any((c) => c.contains('mkdir -p') && c.contains('scratch')), isTrue);
+
+    // Its project is locked once it has messages.
+    await tester.tap(find.byKey(const Key('project-chip')));
+    await settle(tester);
+    expect(find.textContaining('not in a project'), findsWidgets);
+
+    await tester.binding.handlePopRoute();
+    await settle(tester);
+    expect(find.text('Other chats'), findsOneWidget);
+    expect(find.text('Hello there'), findsOneWidget);
+
+    // Picking a project for a new chat before the first message.
+    await tester.tap(find.text('New chat'));
+    await settle(tester, 20);
+    await tester.tap(find.byKey(const Key('project-chip')));
+    await settle(tester);
+    await tester.tap(find.text('/home/dev/project'));
+    await settle(tester);
+    expect(find.text('What should we build in project?'), findsOneWidget);
   });
 
   testWidgets('setup installs agy and offers sign-in when signed out', (tester) async {
@@ -151,7 +190,7 @@ void main() {
         scrollable: find.byType(Scrollable).first);
     await tester.tap(find.text('Continue anyway'));
     await settle(tester);
-    expect(find.text('Open a workspace'), findsOneWidget);
+    expect(find.text('No chats yet'), findsOneWidget);
   });
 
   testWidgets('a reply that was streaming when the app closed resumes from its offset', (tester) async {
@@ -162,7 +201,7 @@ void main() {
     await storage.saveConversation(Conversation(
       id: 'c1',
       serverId: 'p1',
-      workspace: '/home/dev/project',
+      project: '/home/dev/project',
       title: 'Earlier',
       createdAt: DateTime(2026),
       messages: [
@@ -185,7 +224,7 @@ void main() {
     await settle(tester);
     await tester.tap(find.text('VPS'));
     await settle(tester, 30);
-    await tester.tap(find.text('project'));
+    await tester.tap(find.text('Earlier'));
     await settle(tester, 40);
 
     final follow = host.commands.firstWhere((c) => c.contains('tail -c'));
@@ -212,7 +251,7 @@ void main() {
     await settle(tester);
     await tester.tap(find.text('VPS'));
     await settle(tester, 30);
-    await tester.tap(find.text('project'));
+    await tester.tap(find.byTooltip('New chat in project'));
     await settle(tester, 30);
 
     await tester.enterText(find.byType(TextField).last, 'Fix the build');
@@ -244,7 +283,7 @@ void main() {
     expect(find.text('Fix the build'), findsNothing);
     notifier.tap(link);
     await settle(tester);
-    expect(find.text('Fix the build'), findsOneWidget);
+    expect(find.text('Fix the build'), findsWidgets);
 
     // No notification while the app is in the foreground.
     await tester.enterText(find.byType(TextField).last, 'Again');
@@ -263,7 +302,7 @@ void main() {
       await storage.saveConversation(Conversation(
         id: id,
         serverId: 'p1',
-        workspace: '/home/dev/project',
+        project: '/home/dev/project',
         title: title,
         createdAt: DateTime(2026),
         updatedAt: id == 'new' ? DateTime(2026, 2) : DateTime(2026, 1),
@@ -321,7 +360,7 @@ void main() {
     final register = host.stdinFor.entries.firstWhere((e) => e.key.contains('push.new'));
     expect(register.value, 'https://relay.example.dev\tk-123');
 
-    await tester.tap(find.text('project'));
+    await tester.tap(find.byTooltip('New chat in project'));
     await settle(tester, 30);
     await tester.enterText(find.byType(TextField).last, 'Fix the build');
     await tester.pump();

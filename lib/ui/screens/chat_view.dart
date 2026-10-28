@@ -10,6 +10,7 @@ import '../theme/app_theme.dart';
 import '../widgets/common.dart';
 import '../widgets/message_widgets.dart';
 import '../widgets/remote_browser.dart';
+import 'project_picker.dart';
 import 'workspace_home.dart';
 
 class ChatView extends StatefulWidget {
@@ -71,29 +72,41 @@ class _Welcome extends StatelessWidget {
   const _Welcome({required this.onPick});
   final void Function(String) onPick;
 
-  static const _suggestions = [
+  static const _projectSuggestions = [
     ('Explain this codebase', 'Give me an overview of this codebase: structure, main components and how to run it.'),
     ('Find bugs', 'Look for likely bugs or risky code in this project and suggest fixes.'),
     ('Write tests', 'Add tests for the most important untested code in this project.'),
     ('Review changes', 'Review my uncommitted changes and point out problems.'),
   ];
 
+  static const _chatSuggestions = [
+    ('Plan a project', 'Help me plan a new project: goals, architecture and first steps.'),
+    ('Write a script', 'Write a small script that '),
+    ('Explain a concept', 'Explain how '),
+    ('Check the server', 'Check this server: disk space, memory, running services and anything that looks wrong.'),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    final ws = context.read<SessionState>().workspace ?? '';
+    final project = context.watch<ChatController>().current?.project;
+    final suggestions = project == null ? _chatSuggestions : _projectSuggestions;
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
       children: [
         const Center(child: AgLogo(size: 56)),
         const SizedBox(height: 20),
-        Text('What should we build in ${baseName(ws)}?',
+        Text(project == null ? 'What can I help with?' : 'What should we build in ${baseName(project)}?',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
-        const Text('The agent runs on your server with full access to this workspace.',
-            textAlign: TextAlign.center, style: TextStyle(color: AppColors.textMuted)),
+        Text(
+            project == null
+                ? 'This chat is not in a project. Pick one with the project chip below to let the agent work in a folder.'
+                : 'The agent runs on your server with full access to this project.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.textMuted)),
         const SizedBox(height: 28),
-        for (final (title, prompt) in _suggestions)
+        for (final (title, prompt) in suggestions)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Card(
@@ -154,7 +167,7 @@ class _ComposerState extends State<_Composer> {
     switch (cmd) {
       case '/new':
       case '/clear':
-        chat.newConversation();
+        chat.newChat(project: chat.current?.project);
         return true;
       case '/model':
         await showModelPicker(context);
@@ -266,6 +279,8 @@ class _ComposerState extends State<_Composer> {
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
+                  _ProjectChip(convo: chat.current),
+                  const SizedBox(width: 6),
                   _OptionChip(
                     icon: _modeIcon(opts.permissionMode),
                     label: opts.permissionMode.label,
@@ -411,12 +426,51 @@ void insertMention(ChatController chat, String workspace, String path) {
   chat.draft.selection = TextSelection.collapsed(offset: before.length + inserted.length);
 }
 
+/// The chat's project. Changeable until the first message is sent, since
+/// agy ties a conversation to its folder.
+class _ProjectChip extends StatelessWidget {
+  const _ProjectChip({required this.convo});
+  final Conversation? convo;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = convo;
+    if (c == null) return const SizedBox.shrink();
+    final locked = c.messages.isNotEmpty;
+    final label = c.project == null ? 'No project' : baseName(c.project!);
+    return _OptionChip(
+      key: const Key('project-chip'),
+      icon: c.project == null ? Icons.chat_bubble_outline : Icons.folder_rounded,
+      label: label,
+      locked: locked,
+      onTap: () async {
+        if (locked) {
+          showSnack(context, c.project == null
+              ? 'This chat is not in a project. Start a new chat to use one.'
+              : 'This chat belongs to ${c.project}.');
+          return;
+        }
+        final choice = await pickProject(context, current: c.project);
+        if (choice != null && context.mounted) context.read<ChatController>().setProject(choice.path);
+      },
+    );
+  }
+}
+
 class _OptionChip extends StatelessWidget {
-  const _OptionChip({required this.icon, required this.label, required this.onTap, this.highlight = false});
+  const _OptionChip({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.highlight = false,
+    this.locked = false,
+  });
   final IconData icon;
   final String label;
   final VoidCallback onTap;
   final bool highlight;
+  final bool locked;
 
   @override
   Widget build(BuildContext context) {
@@ -440,7 +494,8 @@ class _OptionChip extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12.5, color: highlight ? AppColors.warning : AppColors.text)),
               ),
-              const Icon(Icons.arrow_drop_down, size: 16, color: AppColors.textFaint),
+              if (!locked) const Icon(Icons.arrow_drop_down, size: 16, color: AppColors.textFaint),
+              if (locked) const SizedBox(width: 4),
             ],
           ),
         ),

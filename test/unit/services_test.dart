@@ -112,7 +112,7 @@ void main() {
     expect(p2.authMethod, AuthMethod.privateKey);
     expect(p2.displayAddress, 'u@h:2200');
 
-    final c = Conversation(id: 'c', serverId: '1', workspace: '/a', title: 't', createdAt: DateTime(2026), agyConversationId: 'x')
+    final c = Conversation(id: 'c', serverId: '1', project: '/a', title: 't', createdAt: DateTime(2026), agyConversationId: 'x')
       ..messages.add(ChatMessage(
         id: 'm',
         role: MessageRole.agent,

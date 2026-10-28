@@ -43,6 +43,9 @@ class TerminalSession extends ChangeNotifier {
   TerminalMode? _mode;
   TerminalMode? get mode => _mode;
   List<String> _extraArgs = const [];
+
+  /// Folder the running terminal was started in.
+  String? _dir;
   bool _persist = true;
 
   bool get running => _pty != null;
@@ -81,6 +84,7 @@ class TerminalSession extends ChangeNotifier {
     _notify();
     await _closePty();
     _mode = mode;
+    _dir = session.workspace;
     _extraArgs = extraArgs;
     _persist = persist;
     final command = agy.scripts.terminal(
@@ -152,6 +156,15 @@ class TerminalSession extends ChangeNotifier {
   }
 
   void _onSessionChanged() {
+    // Switched to a chat in another folder: leave the old session (tmux
+    // keeps it on the server) and offer to start one here.
+    if (_dir != null && session.workspace != null && session.workspace != _dir) {
+      _dir = null;
+      _mode = null;
+      terminal.write('\x1b[2J\x1b[H');
+      unawaited(stop());
+      return;
+    }
     if (session.generation != _lastGeneration) {
       _lastGeneration = session.generation;
       // Reconnected: re-attach (tmux keeps agy alive on the server).

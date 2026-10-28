@@ -138,7 +138,7 @@ class ConversationSummary {
   const ConversationSummary({
     required this.id,
     required this.serverId,
-    required this.workspace,
+    this.project,
     required this.title,
     required this.updatedAt,
     this.preview = '',
@@ -146,7 +146,8 @@ class ConversationSummary {
 
   final String id;
   final String serverId;
-  final String workspace;
+  /// Project folder, or null for chats that belong to no project.
+  final String? project;
   final String title;
   final DateTime updatedAt;
   final String preview;
@@ -162,7 +163,7 @@ class ConversationSummary {
     return ConversationSummary(
       id: c.id,
       serverId: c.serverId,
-      workspace: c.workspace,
+      project: c.project,
       title: c.title,
       updatedAt: c.updatedAt,
       preview: preview.length > 120 ? '${preview.substring(0, 120)}…' : preview,
@@ -172,7 +173,7 @@ class ConversationSummary {
   Map<String, dynamic> toJson() => {
         'id': id,
         'serverId': serverId,
-        'workspace': workspace,
+        if (project != null) 'workspace': project,
         'title': title,
         'updatedAt': updatedAt.toIso8601String(),
         'preview': preview,
@@ -182,7 +183,7 @@ class ConversationSummary {
       ConversationSummary(
         id: json['id'] as String,
         serverId: json['serverId'] as String,
-        workspace: json['workspace'] as String? ?? '',
+        project: (json['workspace'] as String?)?.isNotEmpty == true ? json['workspace'] as String : null,
         title: json['title'] as String? ?? 'Conversation',
         updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
             DateTime.now(),
