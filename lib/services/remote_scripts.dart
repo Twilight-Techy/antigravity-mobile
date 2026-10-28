@@ -1,5 +1,12 @@
 import 'dart:convert';
 
+/// Where the server should post when a run ends (see ServerProfile.ntfyUrl).
+class NtfyPing {
+  const NtfyPing(this.url, this.workspaceName);
+  final String url;
+  final String workspaceName;
+}
+
 /// Marker the run-follow script writes to stderr once the agent exits.
 const exitMarker = '__AGM_EXIT__';
 
@@ -65,6 +72,7 @@ abstract class RemoteScripts {
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
+    NtfyPing? notify,
   });
 
   /// Follows a detached run from byte [offset]; stdout carries the agent
@@ -249,16 +257,19 @@ head -c $maxBytes -- "\$F" | base64
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
+    NtfyPing? notify,
   }) {
     final f = '$_runDir/$runId';
     final args = agyArgs.map(quote).join(' ');
+    final ping = notify == null ? '' : _ntfy(notify);
     final inner = '''
 agy -p "\$(cat "$f.prompt")" --output-format stream-json $args < /dev/null > "$f.out" 2> "$f.err" &
 A=\$!
 echo \$A > "$f.pid"
 wait \$A
-echo \$? > "$f.exit"
-''';
+C=\$?
+echo \$C > "$f.exit"
+$ping''';
     return wrap('''
 ${_env()}
 $_b64d
@@ -271,6 +282,20 @@ printf %s ${quote(RemoteScripts.b64(prompt))} | b64d > "$f.prompt"
 nohup sh -c ${quote(inner)} > /dev/null 2>&1 < /dev/null &
 echo "started=$runId"
 ''');
+  }
+
+  /// Posts to ntfy after the run; only the workspace name and outcome are
+  /// sent, never prompt or reply content.
+  String _ntfy(NtfyPing n) {
+    final ok = quote('Agent finished in ${n.workspaceName}');
+    final failed = quote('Agent stopped with an error in ${n.workspaceName}');
+    final url = quote(n.url);
+    return '''
+if [ "\$C" = 0 ]; then M=$ok; else M=$failed; fi
+if command -v curl >/dev/null 2>&1; then curl -fsS -m 15 -H "Title: Antigravity" -H "Tags: robot" -d "\$M" $url >/dev/null 2>&1
+elif command -v wget >/dev/null 2>&1; then wget -q -T 15 -O /dev/null --header="Title: Antigravity" --post-data="\$M" $url
+fi
+''';
   }
 
   @override
@@ -531,6 +556,7 @@ exit 0
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
+    NtfyPing? notify,
   }) =>
       wrap('''
 ${_env()}
@@ -544,9 +570,15 @@ if (Get-Variable PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue) {
 \$prompt = ${_decode(msvcEscape(prompt))}
 & agy -p \$prompt --output-format stream-json ${agyArgs.map(quote).join(' ')}
 \$code = \$LASTEXITCODE
+${notify == null ? '' : _ntfy(notify)}
 [Console]::Error.WriteLine("$exitMarker\$code")
 exit \$code
 ''');
+
+  String _ntfy(NtfyPing n) => '''
+\$m = if (\$code -eq 0) { ${quote('Agent finished in ${n.workspaceName}')} } else { ${quote('Agent stopped with an error in ${n.workspaceName}')} }
+try { Invoke-RestMethod -Method Post -Uri ${quote(n.url)} -Headers @{ Title = "Antigravity"; Tags = "robot" } -Body \$m -TimeoutSec 15 | Out-Null } catch {}
+''';
 
   @override
   String followRun(String runId, int offset) =>

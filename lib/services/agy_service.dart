@@ -411,6 +411,7 @@ class AgyService {
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
+    NtfyPing? notify,
   }) =>
       AgentRun(
         service: this,
@@ -418,6 +419,7 @@ class AgyService {
         cwd: cwd,
         prompt: prompt,
         agyArgs: agyArgs,
+        notify: notify,
       );
 }
 
@@ -455,9 +457,11 @@ class AgentRun {
     required this.cwd,
     required this.prompt,
     required this.agyArgs,
+    this.notify,
   });
 
   final AgyService service;
+  final NtfyPing? notify;
   final String runId;
   final String cwd;
   final String prompt;
@@ -479,6 +483,7 @@ class AgentRun {
       cwd: cwd,
       prompt: prompt,
       agyArgs: agyArgs,
+      notify: notify,
     );
     if (scripts.isWindows) {
       await _follow(command, 0);

@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/conversation.dart';
 import '../../models/server_profile.dart';
 import '../../services/agy_service.dart';
+import '../../services/notifier.dart';
 import '../../state/chat_controller.dart';
 import '../../state/servers_state.dart';
 import '../../state/session_state.dart';
@@ -56,25 +58,93 @@ class _SessionBodyState extends State<_SessionBody> with WidgetsBindingObserver 
   /// background re-checks do not swap it out mid-install.
   bool _inSetup = false;
 
+  late final ChatController _chat;
+  late final Notifier _notifier;
+  StreamSubscription<String>? _taps;
+  bool _background = false;
+  bool _askedPermission = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     final session = context.read<SessionState>();
     session.onHostKey = _confirmHostKey;
+    _notifier = context.read<Notifier>();
+    _chat = context.read<ChatController>()
+      ..onPromptSent = _onPromptSent
+      ..onReplyFinished = _onReplyFinished;
+    _taps = _notifier.taps.listen(_onNotificationTap);
     WidgetsBinding.instance.addPostFrameCallback((_) => session.connect());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _taps?.cancel();
+    _chat
+      ..onPromptSent = null
+      ..onReplyFinished = null;
+    unawaited(_notifier.releaseKeepAlive());
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(context.read<SessionState>().ensureConnected());
+    final session = context.read<SessionState>();
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _background = false;
+        unawaited(_notifier.releaseKeepAlive());
+        unawaited(session.ensureConnected());
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        if (_background) return;
+        _background = true;
+        // Keep the connection up so the reply can finish and we can notify.
+        if (_chat.busy && session.profile.notifyOnFinish) {
+          unawaited(_notifier.keepAlive(workspaceName(session.workspace ?? '')));
+        }
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+        break;
+    }
+  }
+
+  void _onPromptSent() {
+    if (_askedPermission || !context.read<SessionState>().profile.notifyOnFinish) return;
+    _askedPermission = true;
+    unawaited(_notifier.requestPermission());
+  }
+
+  void _onReplyFinished(Conversation conversation, ChatMessage reply) {
+    unawaited(_notifier.releaseKeepAlive());
+    final profile = context.read<SessionState>().profile;
+    // With ntfy the server sends the push itself; avoid a duplicate.
+    final serverPushes = profile.ntfyUrl != null && profile.ntfyUrl!.isNotEmpty;
+    if (!_background || !profile.notifyOnFinish || serverPushes) return;
+    if (reply.status == MessageStatus.cancelled) return;
+    final ws = workspaceName(conversation.workspace);
+    final failed = reply.status == MessageStatus.error;
+    var body = failed
+        ? reply.parts.lastWhere((p) => p.kind == PartKind.error, orElse: () => MessagePart(kind: PartKind.error)).text
+        : reply.plainText;
+    body = body.replaceAll(RegExp(r'[#*`>_]+'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (body.length > 140) body = '${body.substring(0, 140)}…';
+    unawaited(_notifier.agentFinished(
+      conversationId: conversation.id,
+      title: failed ? 'Agent hit an error in $ws' : 'Agent finished in $ws',
+      body: body.isEmpty ? conversation.title : body,
+    ));
+  }
+
+  Future<void> _onNotificationTap(String conversationId) async {
+    final session = context.read<SessionState>();
+    final convo = await session.storage.loadConversation(conversationId);
+    if (convo == null || convo.serverId != session.profile.id) return;
+    if (convo.workspace == session.workspace) {
+      await _chat.open(conversationId);
+      if (mounted) WorkspaceHomeState.of(context)?.showTab(0);
     }
   }
 

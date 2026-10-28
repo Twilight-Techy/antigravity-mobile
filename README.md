@@ -38,6 +38,16 @@ over SSH.
   approvals, etc. It runs inside tmux when available, so sessions survive
   disconnects. A key bar provides esc/tab/ctrl/arrows/`y`/`n`/^C/^O/^R/^K, and
   links such as the Google sign-in URL are detected and offered as Open/Copy.
+- **Notifications**: when the agent finishes while the app is in the
+  background, you get a notification. Tapping it opens that conversation.
+  - Android: a foreground service ("Agent working in …") keeps the
+    connection open until the agent is done.
+  - iOS: the system only allows about 30 seconds of background time, so for
+    longer tasks turn on **Push via ntfy** in the server settings. The server
+    then posts to your [ntfy](https://ntfy.sh) topic when a task ends, which
+    reaches you even if the app was closed. Only the workspace name and
+    outcome are sent, never prompts or replies. Use the dice button to
+    generate an unguessable topic, and subscribe to it in the ntfy app.
 - **Linux, macOS and Windows servers**: scripts are generated for POSIX `sh` or
   PowerShell (Windows OpenSSH) automatically.
 
@@ -92,6 +102,12 @@ flutter run                      # on a connected device or emulator
 flutter build apk --release      # Android
 flutter build ipa                # iOS (on macOS with Xcode)
 ```
+
+CI (`.github/workflows/build.yml`) runs analyze and tests, then builds the
+Android APKs and an **unsigned iOS IPA** on a macOS runner. Download them from
+the run's artifacts. The IPA can be sideloaded with AltStore or Sideloadly,
+which re-sign it with your Apple ID. Distributing through TestFlight or the
+App Store needs an Apple Developer account and signing secrets.
 
 The release Android build is currently signed with the debug key. Add your
 own signing config in `android/app/build.gradle.kts` before publishing.

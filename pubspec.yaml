@@ -21,6 +21,7 @@ dependencies:
   uuid: ^4.5.0
   url_launcher: ^6.3.3
   markdown: ^7.3.1
+  flutter_local_notifications: ^22.3.3
 
 dev_dependencies:
   flutter_test:

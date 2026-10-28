@@ -8,8 +8,15 @@ import '../models/conversation.dart';
 import '../services/agent_stream_parser.dart';
 import '../services/agy_service.dart';
 import '../services/message_builder.dart';
+import '../services/remote_scripts.dart';
 import '../services/storage_service.dart';
 import 'session_state.dart';
+
+/// Last path segment, handling both separators.
+String workspaceName(String path) {
+  final parts = path.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).toList();
+  return parts.isEmpty ? path : parts.last;
+}
 
 /// Drives the chat for the session's current workspace: conversations,
 /// sending prompts as headless agy runs, streaming and resuming replies.
@@ -45,6 +52,12 @@ class ChatController extends ChangeNotifier {
   /// Bumped when an agent run finishes, so other views (e.g. Changes) can
   /// refresh.
   int completedRuns = 0;
+
+  /// Called when a reply finishes (done, error or cancelled).
+  void Function(Conversation conversation, ChatMessage reply)? onReplyFinished;
+
+  /// Called when a prompt is sent.
+  VoidCallback? onPromptSent;
 
   bool get busy => _run != null;
 
@@ -161,14 +174,17 @@ class ChatController extends ChangeNotifier {
       ...options.toArgs(),
       if (convo.agyConversationId != null) ...['--conversation', convo.agyConversationId!],
     ];
+    final ntfy = session.profile.ntfyUrl;
     final run = agy.createRun(
       runId: reply.runId!,
       cwd: convo.workspace,
       prompt: prompt,
       agyArgs: args,
+      notify: ntfy == null || ntfy.isEmpty ? null : NtfyPing(ntfy, workspaceName(convo.workspace)),
     );
     _attach(run, reply);
     unawaited(run.start());
+    onPromptSent?.call();
     return true;
   }
 
@@ -264,7 +280,7 @@ class ChatController extends ChangeNotifier {
                 ? MessageStatus.error
                 : MessageStatus.done;
           }
-          _complete(builder);
+          _complete(builder, reply);
         case RunLost(:final reason, :final resumable):
           reply.status = MessageStatus.interrupted;
           if (!resumable) {
@@ -278,7 +294,7 @@ class ChatController extends ChangeNotifier {
     });
   }
 
-  void _complete(MessageBuilder builder) {
+  void _complete(MessageBuilder builder, ChatMessage reply) {
     final convo = _current;
     if (convo != null && builder.conversationId != null) {
       convo.agyConversationId = builder.conversationId;
@@ -289,6 +305,7 @@ class ChatController extends ChangeNotifier {
     _notifyTimer?.cancel();
     _notify();
     unawaited(_save());
+    if (convo != null) onReplyFinished?.call(convo, reply);
   }
 
   void _onSessionChanged() {

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -5,6 +7,13 @@ import 'package:provider/provider.dart';
 import '../../models/server_profile.dart';
 import '../../state/servers_state.dart';
 import '../theme/app_theme.dart';
+
+/// A hard-to-guess ntfy topic name; anyone who knows it can read the pushes.
+String randomTopic() {
+  const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+  final r = Random.secure();
+  return 'agm-${List.generate(20, (_) => chars[r.nextInt(chars.length)]).join()}';
+}
 
 /// Add or edit a server. Pops with the saved profile.
 class ServerFormScreen extends StatefulWidget {
@@ -29,6 +38,8 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
   final _apiKey = TextEditingController();
   late AuthMethod _auth = widget.profile.authMethod;
   late bool _useTmux = widget.profile.useTmux;
+  late bool _notify = widget.profile.notifyOnFinish;
+  late final _ntfy = TextEditingController(text: widget.profile.ntfyUrl ?? '');
   bool _showPassword = false;
   bool _saving = false;
   bool _loadingSecrets = true;
@@ -52,7 +63,7 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
 
   @override
   void dispose() {
-    for (final c in [_name, _host, _port, _user, _password, _key, _passphrase, _apiKey]) {
+    for (final c in [_name, _host, _port, _user, _password, _key, _passphrase, _apiKey, _ntfy]) {
       c.dispose();
     }
     super.dispose();
@@ -72,7 +83,9 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
       ..port = int.tryParse(_port.text.trim()) ?? 22
       ..username = _user.text.trim()
       ..authMethod = _auth
-      ..useTmux = _useTmux;
+      ..useTmux = _useTmux
+      ..notifyOnFinish = _notify
+      ..ntfyUrl = _ntfy.text.trim().isEmpty ? null : _ntfy.text.trim();
     p.name = _name.text.trim().isEmpty ? p.host : _name.text.trim();
     String? orNull(String s) => s.trim().isEmpty ? null : s;
     await servers.save(
@@ -215,8 +228,43 @@ class _ServerFormScreenState extends State<ServerFormScreen> {
                           subtitle: const Text(
                               'Runs the interactive terminal in tmux so agy keeps running when your phone disconnects.'),
                         ),
+                        const Divider(height: 1),
+                        SwitchListTile(
+                          value: _notify,
+                          onChanged: (v) => setState(() => _notify = v),
+                          title: const Text('Notify me when the agent finishes'),
+                          subtitle: const Text(
+                              'While the app is in the background. On iOS the system only allows this for a short while, so see the option below for long tasks.'),
+                        ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _ntfy,
+                    autocorrect: false,
+                    keyboardType: TextInputType.url,
+                    style: monoStyle(size: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Push via ntfy (optional)',
+                      hintText: 'https://ntfy.sh/your-topic',
+                      helperText:
+                          'The server posts here when a task ends, so you get a push even if the app is closed. Subscribe to the topic in the ntfy app. Only the workspace name is sent.',
+                      helperMaxLines: 4,
+                      suffixIcon: IconButton(
+                        tooltip: 'Generate a private topic',
+                        icon: const Icon(Icons.casino_outlined),
+                        onPressed: () => setState(() => _ntfy.text = 'https://ntfy.sh/${randomTopic()}'),
+                      ),
+                    ),
+                    validator: (v) {
+                      final t = v?.trim() ?? '';
+                      if (t.isEmpty) return null;
+                      final uri = Uri.tryParse(t);
+                      return uri == null || !uri.isScheme('https') && !uri.isScheme('http') || uri.pathSegments.isEmpty
+                          ? 'Enter a topic URL like https://ntfy.sh/my-topic'
+                          : null;
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextFormField(

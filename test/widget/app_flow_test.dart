@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:antigravity_mobile/main.dart';
 import 'package:antigravity_mobile/models/conversation.dart';
 import 'package:antigravity_mobile/models/server_profile.dart';
+import 'package:antigravity_mobile/services/notifier.dart';
 import 'package:antigravity_mobile/services/remote_host.dart';
 import 'package:antigravity_mobile/services/ssh_host.dart';
 import 'package:antigravity_mobile/services/storage_service.dart';
@@ -193,6 +194,61 @@ void main() {
     final saved = await storage.loadConversation('c1');
     expect(saved!.messages.last.status, MessageStatus.done);
     expect(saved.agyConversationId, 'conv-9');
+  });
+
+  testWidgets('notifies when the agent finishes while the app is in the background', (tester) async {
+    final notifier = SilentNotifier();
+    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
+    await storage.saveProfiles([profile]);
+    await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
+    await storage.trustHostKey('h:22', 'SHA256:abc123');
+
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(AntigravityMobileApp(storage: storage, connector: connector, notifier: notifier));
+    await settle(tester);
+    await tester.tap(find.text('VPS'));
+    await settle(tester, 30);
+    await tester.tap(find.text('project'));
+    await settle(tester, 30);
+
+    await tester.enterText(find.byType(TextField).last, 'Fix the build');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await tester.pump();
+    expect(notifier.permissionRequests, 1);
+
+    // The user switches away while the agent is working.
+    for (final s in [AppLifecycleState.inactive, AppLifecycleState.hidden, AppLifecycleState.paused]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    expect(notifier.keptAlive, isTrue);
+    await settle(tester, 40);
+
+    expect(notifier.shown, hasLength(1));
+    final (title, body, conversationId) = notifier.shown.single;
+    expect(title, 'Agent finished in project');
+    expect(body, contains('Flutter app'));
+    expect(notifier.keptAlive, isFalse);
+
+    // Tapping the notification opens that conversation.
+    for (final s in [AppLifecycleState.hidden, AppLifecycleState.inactive, AppLifecycleState.resumed]) {
+      tester.binding.handleAppLifecycleStateChanged(s);
+    }
+    await tester.tap(find.byIcon(Icons.add_comment_outlined));
+    await settle(tester);
+    expect(find.text('Fix the build'), findsNothing);
+    notifier.tap(conversationId);
+    await settle(tester);
+    expect(find.text('Fix the build'), findsOneWidget);
+
+    // No notification while the app is in the foreground.
+    await tester.enterText(find.byType(TextField).last, 'Again');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Send'));
+    await settle(tester, 40);
+    expect(notifier.shown, hasLength(1));
   });
 
   testWidgets('rejecting the host key does not connect', (tester) async {

@@ -15,6 +15,8 @@ class ServerProfile {
     required this.username,
     this.authMethod = AuthMethod.password,
     this.useTmux = true,
+    this.notifyOnFinish = true,
+    this.ntfyUrl,
     List<String>? recentWorkspaces,
     AgentOptions? agentOptions,
     this.lastConnectedAt,
@@ -31,6 +33,14 @@ class ServerProfile {
   /// Run the interactive terminal inside tmux so sessions survive the phone
   /// going to sleep or switching networks.
   bool useTmux;
+
+  /// Show a notification when the agent finishes while the app is in the
+  /// background.
+  bool notifyOnFinish;
+
+  /// Optional ntfy topic URL (e.g. https://ntfy.sh/agm-…) the server posts
+  /// to when a run ends, so a push arrives even if the app was closed.
+  String? ntfyUrl;
 
   /// Most recently used first.
   List<String> recentWorkspaces;
@@ -57,6 +67,8 @@ class ServerProfile {
         'username': username,
         'authMethod': authMethod.name,
         'useTmux': useTmux,
+        'notifyOnFinish': notifyOnFinish,
+        if (ntfyUrl != null) 'ntfyUrl': ntfyUrl,
         'recentWorkspaces': recentWorkspaces,
         'agentOptions': agentOptions.toJson(),
         'lastConnectedAt': lastConnectedAt?.toIso8601String(),
@@ -73,6 +85,8 @@ class ServerProfile {
           orElse: () => AuthMethod.password,
         ),
         useTmux: json['useTmux'] as bool? ?? true,
+        notifyOnFinish: json['notifyOnFinish'] as bool? ?? true,
+        ntfyUrl: json['ntfyUrl'] as String?,
         recentWorkspaces:
             (json['recentWorkspaces'] as List?)?.cast<String>().toList(),
         agentOptions: json['agentOptions'] is Map

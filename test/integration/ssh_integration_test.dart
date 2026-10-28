@@ -11,6 +11,7 @@ import 'package:antigravity_mobile/models/server_profile.dart';
 import 'package:antigravity_mobile/services/agent_stream_parser.dart';
 import 'package:antigravity_mobile/services/agy_service.dart';
 import 'package:antigravity_mobile/services/message_builder.dart';
+import 'package:antigravity_mobile/services/remote_scripts.dart';
 import 'package:antigravity_mobile/services/ssh_host.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -172,6 +173,32 @@ and a second line ✓''';
     expect(last, isA<RunExit>());
     expect((last as RunExit).code, isNot(0));
     expect(sw.elapsed.inSeconds, lessThan(15));
+  }, skip: skip);
+
+  test('the server pings ntfy when a run ends', () async {
+    // Stand-in curl that records how it was called.
+    await host.run("sh -c 'printf \"%s\\n\" \"#!/bin/sh\" \"printf \\\"%s|\\\" \\\"\\\$@\\\" > \\\$HOME/curl.log\" > \$HOME/.local/bin/curl; chmod +x \$HOME/.local/bin/curl'");
+    addTearDown(() => host.run("sh -c 'rm -f \$HOME/.local/bin/curl \$HOME/curl.log'"));
+    final run = agy.createRun(
+      runId: 'it-ntfy-${DateTime.now().microsecondsSinceEpoch}',
+      cwd: '~/project',
+      prompt: 'hi',
+      agyArgs: const [],
+      notify: const NtfyPing('https://ntfy.sh/agm-test', 'project'),
+    );
+    RunEvent? last;
+    final done = run.events.forEach((e) => last = e);
+    await run.start();
+    await done;
+    expect((last as RunExit).code, 0);
+    String log = '';
+    for (var i = 0; i < 20 && log.isEmpty; i++) {
+      log = (await host.run("sh -c 'cat \$HOME/curl.log 2>/dev/null'")).stdout;
+      if (log.isEmpty) await Future.delayed(const Duration(milliseconds: 200));
+    }
+    expect(log, contains('https://ntfy.sh/agm-test'));
+    expect(log, contains('Agent finished in project'));
+    expect(log, isNot(contains('hi|')), reason: 'the prompt is never sent');
   }, skip: skip);
 
   test('stores the API key via stdin in a private file', () async {
