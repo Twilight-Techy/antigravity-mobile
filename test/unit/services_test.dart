@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:antigravity_mobile/models/agent_options.dart';
 import 'package:antigravity_mobile/models/conversation.dart';
@@ -34,13 +35,14 @@ void main() {
   group('PowerShellScripts', () {
     const s = PowerShellScripts();
 
-    test('encodes commands as UTF-16LE base64', () {
+    test('sends scripts gzip-compressed, in characters cmd.exe passes through', () {
       final cmd = s.readAgySettings();
       expect(cmd, startsWith('powershell '));
-      final b64 = cmd.split(' ').last;
-      final bytes = base64.decode(b64);
-      final units = [for (var i = 0; i < bytes.length; i += 2) bytes[i] | (bytes[i + 1] << 8)];
-      expect(String.fromCharCodes(units), contains('settings.json'));
+      final b64 = RegExp(r"FromBase64String\('([A-Za-z0-9+/=]+)'\)").firstMatch(cmd)!.group(1)!;
+      final script = utf8.decode(gzip.decode(base64.decode(b64)));
+      expect(script, contains('settings.json'));
+      final quoted = cmd.substring(cmd.indexOf('"') + 1, cmd.lastIndexOf('"'));
+      expect(quoted, isNot(matches(RegExp(r'["%^&|<>]'))));
     });
 
     test('path helpers', () {
