@@ -13,6 +13,7 @@ import '../widgets/remote_browser.dart';
 import 'agent_settings_screen.dart';
 import 'artifacts_screen.dart';
 import 'project_picker.dart';
+import 'report_screen.dart';
 import 'server_tools_screen.dart';
 import 'workspace_home.dart';
 
@@ -215,6 +216,12 @@ class _ComposerState extends State<_Composer> {
         return true;
     }
     final command = slashCommands.where((c) => c.name == cmd).firstOrNull;
+    if (command != null && command.report) {
+      if (!mounted) return true;
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ReportScreen(session: session, title: command.description, commands: [cmd])));
+      return true;
+    }
     if (command != null && command.terminal) {
       await _runInTerminal(arg.isEmpty ? cmd + (command.takesArgument ? ' ' : '') : '$cmd $arg');
       return true;
@@ -426,28 +433,52 @@ class _ComposerState extends State<_Composer> {
   }
 
   Future<void> _effortPicker(ChatController chat) async {
+    final agy = context.read<SessionState>().agy;
+    // Levels the chosen model offers, from `agy -p /effort`.
+    final levels = agy?.report('/effort', model: chat.options.model).then((r) {
+      final available = r.data?['available'];
+      return available is List ? available.whereType<String>().toSet() : null;
+    });
     final picked = await showModalBottomSheet<Effort>(
       context: context,
       builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(bottom: 8),
-              child: Text('Reasoning effort', style: TextStyle(fontWeight: FontWeight.w600)),
-            ),
-            for (final e in Effort.values)
-              ListTile(
-                leading: Icon(e == chat.options.effort ? Icons.radio_button_checked : Icons.radio_button_off,
-                    color: AppColors.accent),
-                title: Text(e == Effort.auto
-                    ? 'Auto (agy default)'
-                    : e == Effort.max
-                        ? 'Max (only some models)'
-                        : e.name[0].toUpperCase() + e.name.substring(1)),
-                onTap: () => Navigator.pop(context, e),
-              ),
-          ],
+        child: FutureBuilder<Set<String>?>(
+          future: levels,
+          builder: (context, snap) {
+            final available = snap.data;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 4),
+                  child: Text('Reasoning effort', style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    snap.connectionState == ConnectionState.waiting
+                        ? 'Checking which levels this model offers…'
+                        : available == null
+                            ? 'Levels depend on the model.'
+                            : 'This model offers: ${available.join(', ')}',
+                    style: const TextStyle(fontSize: 12.5, color: AppColors.textMuted),
+                  ),
+                ),
+                for (final e in Effort.values)
+                  ListTile(
+                    enabled: e == Effort.auto || available == null || available.contains(e.name),
+                    leading: Icon(e == chat.options.effort ? Icons.radio_button_checked : Icons.radio_button_off,
+                        color: AppColors.accent),
+                    title: Text(switch (e) {
+                      Effort.auto => 'Auto (agy default)',
+                      Effort.xhigh => 'Extra high',
+                      _ => e.name[0].toUpperCase() + e.name.substring(1),
+                    }),
+                    onTap: () => Navigator.pop(context, e),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -739,7 +770,7 @@ Future<void> showModelPicker(BuildContext context) async {
 
 class SlashCommand {
   const SlashCommand(this.name, this.description,
-      {this.terminal = false, this.app = false, this.takesArgument = false});
+      {this.terminal = false, this.app = false, this.report = false, this.takesArgument = false});
   final String name;
   final String description;
 
@@ -748,6 +779,9 @@ class SlashCommand {
 
   /// Handled by the app itself.
   final bool app;
+
+  /// Reports agy answers headlessly (`agy -p /usage`), shown natively.
+  final bool report;
   final bool takesArgument;
 }
 
@@ -774,7 +808,7 @@ const slashCommands = [
   SlashCommand('/boost', 'Multi-agent deep reasoning (paid plans)', takesArgument: true),
   SlashCommand('/teamwork-preview', 'Multi-agent teams (paid plans)', takesArgument: true),
   SlashCommand('/learn', 'Turn corrections into rules or skills', takesArgument: true),
-  // Interactive panels, in the terminal.
+  // Interactive panels, in the terminal (agy refuses them in -p mode).
   SlashCommand('/agents', 'Subagents: watch, approve, message', terminal: true),
   SlashCommand('/tasks', 'Background tasks: logs, stop', terminal: true),
   SlashCommand('/diff', 'Review per-turn changes, comment lines', terminal: true),
@@ -784,12 +818,12 @@ const slashCommands = [
   SlashCommand('/schedule', 'Run a task later or on a cron', terminal: true, takesArgument: true),
   SlashCommand('/browser', 'Browser subagent driving Chrome', terminal: true, takesArgument: true),
   SlashCommand('/codesearch', 'Code search panel', terminal: true),
-  SlashCommand('/usage', 'Model quota (also /quota)', terminal: true),
-  SlashCommand('/credits', 'AI credits', terminal: true),
+  SlashCommand('/usage', 'Model quota (also /quota)', report: true),
+  SlashCommand('/credits', 'AI credits', report: true),
   SlashCommand('/context', 'Context-window usage', terminal: true),
   SlashCommand('/resume', 'Conversations started elsewhere', terminal: true),
-  SlashCommand('/skills', 'Browse skills', terminal: true),
-  SlashCommand('/hooks', 'Browse hooks', terminal: true),
+  SlashCommand('/skills', 'Browse skills', report: true),
+  SlashCommand('/hooks', 'Browse hooks', report: true),
   SlashCommand('/mcp', 'MCP server manager', terminal: true),
   SlashCommand('/plugin', 'Plugin manager and marketplace', terminal: true),
   SlashCommand('/config', 'All settings', terminal: true),
@@ -798,7 +832,7 @@ const slashCommands = [
   SlashCommand('/title', 'Terminal title', terminal: true),
   SlashCommand('/feedback', 'Send feedback', terminal: true),
   SlashCommand('/logout', 'Sign out of agy', terminal: true),
-  SlashCommand('/help', 'Commands and shortcuts', terminal: true),
+  SlashCommand('/help', 'Commands and shortcuts', report: true),
 ];
 
 /// Aliases from the agy reference.
@@ -837,11 +871,11 @@ class _SlashSheet extends StatelessWidget {
               dense: true,
               leading: Text(c.name, style: monoStyle(size: 13.5, color: AppColors.accent)),
               title: Text(c.description, style: const TextStyle(fontSize: 13.5)),
-              trailing: c.terminal
+              trailing: c.terminal && !c.report
                   ? const Tooltip(
                       message: 'Opens in the Terminal tab',
                       child: Icon(Icons.terminal, size: 16, color: AppColors.textFaint))
-                  : c.app
+                  : c.app || c.report
                       ? const Tooltip(
                           message: 'Handled in the app',
                           child: Icon(Icons.phone_android, size: 16, color: AppColors.textFaint))

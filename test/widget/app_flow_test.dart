@@ -383,17 +383,20 @@ void main() {
     await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
     await storage.trustHostKey('h:22', 'SHA256:abc123');
     host.agentOutput = (_) => [
-          jsonEncode({'event': 'init', 'permission_mode': 'request-review'}),
-          jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 1, 'state': 'DONE', 'step_type': 'tool',
-            'tool_info': {'name': 'edit_file', 'parameters': {'path': 'lib/main.dart'}, 'output': 'ok'}}),
-          jsonEncode({'type': 'artifact', 'name': 'implementation_plan.md', 'content': '# The plan'}),
-          jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool',
+          jsonEncode({'event': 'init', 'init': {'permission_mode': 'request-review'}}),
+          jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 1, 'state': 'DONE', 'step_type': 'tool',
+            'tool_info': {'name': 'edit_file', 'parameters': {'path': 'lib/main.dart'}, 'output': 'ok'}}}),
+          for (final state in ['ACTIVE', 'DONE'])
+            jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 2, 'state': state, 'step_type': 'tool',
+              'tool_name': 'write_file',
+              'tool_info': {'name': 'write_file', 'parameters': {'Path': '/home/dev/.gemini/antigravity-cli/brain/conv-1/implementation_plan.md'}}}}),
+          jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 2, 'state': 'DONE', 'step_type': 'subagent',
             'tool_name': 'invoke_subagent',
-            'subagent_info': {'subagents': [{'type_name': 'research', 'role': 'Docs researcher', 'conversation_id': 'sub-1', 'log_uri': 'file:///home/dev/.gemini/sub-1.jsonl'}]}}),
-          jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 3, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Done.'}),
-          jsonEncode({'event': 'result', 'conversation_id': 'conv-1', 'status': 'SUCCESS', 'response': 'Done.'}),
+            'subagent_info': {'subagents': [{'type_name': 'research', 'role': 'Docs researcher', 'conversation_id': 'sub-1', 'log_uri': 'file:///home/dev/.gemini/sub-1.jsonl'}]}}}),
+          jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 3, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Done.'}}),
+          jsonEncode({'event': 'result', 'result': {'conversation_id': 'conv-1', 'status': 'SUCCESS', 'response': 'Done.',
+            'denied_actions': [{'action': 'command', 'display_name': 'RunCommand'}]}}),
         ];
-    host.agentStderr = ['Tool run_command was denied: requires approval'];
 
     tester.view.physicalSize = const Size(1080, 2340);
     tester.view.devicePixelRatio = 2.75;
@@ -427,12 +430,13 @@ void main() {
     // The reply shows the artifact, the subagent and the skipped tool.
     expect(find.text('implementation_plan.md'), findsOneWidget);
     expect(find.textContaining('Docs researcher', findRichText: true), findsOneWidget);
-    expect(find.text('Tool run_command was denied: requires approval'), findsOneWidget);
+    expect(find.text('RunCommand (command)'), findsOneWidget);
 
+    // Artifacts are read from agy's brain directory on the server.
     await tester.tap(find.text('implementation_plan.md'));
     await settle(tester, 20);
     expect(find.text('Implementation plan'), findsOneWidget);
-    expect(find.text('The plan'), findsOneWidget);
+    expect(host.commands.last, contains('brain/conv-1/implementation_plan.md'));
     await tester.pageBack();
     await settle(tester);
 

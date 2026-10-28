@@ -50,7 +50,7 @@ void main() {
     expect(agy.scripts.isWindows, isFalse);
     expect(agy.info.os.name, 'linux');
     expect(agy.info.agyInstalled, isTrue);
-    expect(agy.info.agyVersion, contains('1.4.4'));
+    expect(agy.info.agyVersion, contains('1.4.9'));
     expect(agy.info.hasGit, isTrue);
   }, skip: skip);
 
@@ -230,17 +230,33 @@ and a second line ✓''';
       prompt: 'please deny-me',
       agyArgs: const ['--agent', 'reviewer', '--add-dir', '/tmp', '--print-timeout', '0s'],
     );
+    final message = ChatMessage(id: 'm', role: MessageRole.agent, createdAt: DateTime.now());
+    final builder = MessageBuilder(message);
+    final parser = AgentStreamParser();
     RunEvent? last;
-    final done = run.events.forEach((e) => last = e);
+    final done = run.events.forEach((e) {
+      last = e;
+      if (e is RunLine) parser.parseLine(e.line).forEach(builder.apply);
+    });
     await run.start();
     await done;
     final exit = last as RunExit;
     expect(exit.code, 0);
-    expect(skippedTools(exit.stderr), ['Tool run_command was denied: requires approval (headless)']);
+    expect(builder.deniedActions, ['RunCommand (command)']);
+    expect(skippedTools(exit.stderr), hasLength(1));
     final args = await host.run("sh -c 'cat \$HOME/.fake_last_args'");
     expect(args.stdout, contains('--output-format stream-json'));
     expect(args.stdout, contains('--agent reviewer'));
     expect(args.stdout, contains('--print-timeout 0s'));
+  }, skip: skip);
+
+  test('reads headless slash-command reports', () async {
+    final usage = await agy.report('/usage');
+    expect(usage.error, isNull);
+    expect(usage.data, {'groups': []});
+    expect(usage.text, contains('80% left'));
+    final diff = await agy.report('/diff');
+    expect(diff.error, contains('not available in print mode'));
   }, skip: skip);
 
   test('runs agy subcommands', () async {
@@ -250,14 +266,18 @@ and a second line ✓''';
   }, skip: skip);
 
   test('finds artifacts saved for a conversation', () async {
-    await host.run("sh -c 'D=\$HOME/.gemini/antigravity/brain/conv-art-1; mkdir -p \$D/sub; "
-        "printf \"# Plan\\n\" > \$D/implementation_plan.md; printf x > \$D/task.md; printf y > \$D/sub/notes.txt; "
+    // The layout agy 1.4.9 writes: artifacts with sibling .metadata.json
+    // files, plus scratch files and generated logs that aren't artifacts.
+    await host.run("sh -c 'D=\$HOME/.gemini/antigravity-cli/brain/conv-art-1; mkdir -p \$D/sub \$D/scratch \$D/.system_generated/logs; "
+        "printf \"# Plan\\n\" > \$D/implementation_plan.md; printf {} > \$D/implementation_plan.md.metadata.json; "
+        "printf x > \$D/task.md; printf y > \$D/sub/notes.txt; printf s > \$D/scratch/debug.txt; "
+        "printf l > \$D/.system_generated/logs/transcript.jsonl; printf t > \$D/.system_generated/steps.txt; "
         "printf z > \$D/image.png; mkdir -p \$HOME/.gemini/other; printf q > \$HOME/.gemini/other/unrelated.md'");
-    addTearDown(() => host.run("sh -c 'rm -rf \$HOME/.gemini/antigravity \$HOME/.gemini/other'"));
+    addTearDown(() => host.run("sh -c 'rm -rf \$HOME/.gemini/antigravity-cli/brain \$HOME/.gemini/other'"));
 
     final found = await agy.findArtifacts('conv-art-1');
     expect(found.map((f) => f.name), ['implementation_plan.md', 'notes.txt', 'task.md']);
-    expect(found.first.path, endsWith('/.gemini/antigravity/brain/conv-art-1/implementation_plan.md'));
+    expect(found.first.path, endsWith('/.gemini/antigravity-cli/brain/conv-art-1/implementation_plan.md'));
     expect(found.first.size, 7);
     expect((await agy.readFile(found.first.path)).text, '# Plan\n');
     expect(await agy.findArtifacts('nope-404'), isEmpty);

@@ -178,6 +178,45 @@ class GitStatus {
 
 /// High-level operations against the VPS: setup checks, the file browser,
 /// git, and headless agent runs.
+/// What agy printed for a headless slash command: the structured `data` of
+/// its `command_result` event and the plain-text `response` of the result.
+class AgyReport {
+  const AgyReport(this.command, {this.data, this.text = '', this.error});
+
+  final String command;
+  final Map<String, dynamic>? data;
+  final String text;
+  final String? error;
+
+  factory AgyReport.parse(String command, String output) {
+    Map<String, dynamic>? data;
+    var text = '';
+    String? error;
+    for (final line in const LineSplitter().convert(output)) {
+      final t = line.trim();
+      if (!t.startsWith('{')) continue;
+      try {
+        final m = jsonDecode(t);
+        if (m is! Map) continue;
+        final event = m['event'];
+        if (event == 'command_result' && m['command'] is Map && (m['command'] as Map)['data'] is Map) {
+          data = Map<String, dynamic>.from((m['command'] as Map)['data'] as Map);
+        } else if (event == 'result' && m['result'] is Map) {
+          final r = m['result'] as Map;
+          text = r['response'] is String ? r['response'] as String : '';
+          final e = r['error'];
+          if (e is String && e.isNotEmpty) error = e;
+        }
+      } catch (_) {}
+    }
+    if (data == null && text.isEmpty && error == null) {
+      final plain = output.trim();
+      error = plain.isEmpty ? 'agy printed nothing.' : plain;
+    }
+    return AgyReport(command, data: data, text: text, error: error);
+  }
+}
+
 class AgyService {
   AgyService(this.host, this.scripts, this.info);
 
@@ -268,6 +307,19 @@ class AgyService {
   Future<CommandResult> runAgy(List<String> args, {Duration timeout = const Duration(seconds: 60)}) =>
       host.run(scripts.agy(args), timeout: timeout);
 
+  /// Runs a slash command agy answers itself in headless mode (`/usage`,
+  /// `/credits`, `/effort`, `/model`, `/skills`, `/hooks`, `/help`…).
+  Future<AgyReport> report(String command, {String? model}) async {
+    final CommandResult r;
+    try {
+      r = await runAgy(['-p', command, '--output-format', 'stream-json', if (model != null) ...['--model', model]],
+          timeout: const Duration(seconds: 90));
+    } catch (e) {
+      return AgyReport(command, error: e.toString());
+    }
+    return AgyReport.parse(command, r.stdout);
+  }
+
   /// Custom agents from `agy agents` (names usable with `--agent`).
   Future<List<String>> listAgents() async {
     final r = await runAgy(const ['agents'], timeout: const Duration(seconds: 30));
@@ -286,6 +338,9 @@ class AgyService {
       if (line.isEmpty) continue;
       // Table borders and rules (ASCII or box-drawing characters).
       if (RegExp(r'^[-=+|:\u2500-\u257F]+$').hasMatch(line.replaceAll(' ', ''))) continue;
+      // agy prints `id<TAB>Display name`.
+      if (line.contains('\t')) line = line.split('\t').first.trim();
+      if (line.endsWith('...') || line.endsWith('…')) continue;
       line = line.replaceFirst(RegExp(r'^([*•\-–>]|\d+[.)])\s+'), '');
       line = line.replaceAll('│', '|');
       if (line.contains('|')) {

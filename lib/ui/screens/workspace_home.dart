@@ -12,6 +12,7 @@ import 'artifacts_screen.dart';
 import 'changes_view.dart';
 import 'chat_view.dart';
 import 'files_view.dart';
+import 'report_screen.dart';
 import 'server_tools_screen.dart';
 import 'terminal_view.dart';
 
@@ -197,6 +198,20 @@ extension on WorkspaceHomeState {
                 final session = context.read<SessionState>();
                 Navigator.of(context).push(MaterialPageRoute(builder: (_) => ServerToolsScreen(session: session)));
               }),
+              _item(sheet, Icons.data_usage, 'Usage & quota', 'Model quotas and credits (/usage, /credits)', () {
+                Navigator.pop(sheet);
+                final session = context.read<SessionState>();
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) =>
+                        ReportScreen(session: session, title: 'Usage & quota', commands: const ['/usage', '/credits'])));
+              }),
+              _item(sheet, Icons.extension_outlined, 'Skills & hooks', 'Installed skills and hooks (/skills, /hooks)', () {
+                Navigator.pop(sheet);
+                final session = context.read<SessionState>();
+                Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) =>
+                        ReportScreen(session: session, title: 'Skills & hooks', commands: const ['/skills', '/hooks'])));
+              }),
               const _MenuLabel('IN THE TERMINAL, ON THIS CHAT'),
               _item(sheet, Icons.account_tree_outlined, 'Subagents', 'Watch, approve and message subagents (/agents)',
                   () => inTerminal('/agents')),
@@ -216,11 +231,8 @@ extension on WorkspaceHomeState {
                   () => inTerminal('/schedule ')),
               _item(sheet, Icons.travel_explore, 'Browser agent', 'Drive Chrome on the server (/browser)',
                   () => inTerminal('/browser ')),
-              _item(sheet, Icons.data_usage, 'Usage & quota', 'Model quotas (/usage)', () => inTerminal('/usage')),
-              _item(sheet, Icons.toll_outlined, 'Credits', 'AI credits balance (/credits)', () => inTerminal('/credits')),
               _item(sheet, Icons.donut_large, 'Context window', 'Token usage and context files (/context)',
                   () => inTerminal('/context')),
-              _item(sheet, Icons.extension_outlined, 'Skills & hooks', 'Browse skills (/skills)', () => inTerminal('/skills')),
               _item(sheet, Icons.history, 'Other conversations', 'Resume chats started elsewhere (/resume)',
                   () => inTerminal('/resume')),
               _item(sheet, Icons.terminal, 'Continue in terminal', 'This chat in the full agy interface',

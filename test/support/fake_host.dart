@@ -20,14 +20,14 @@ class FakeHost implements RemoteHost {
   /// Lines the fake agent streams for each prompt, in agy's documented
   /// headless stream-json format.
   List<String> Function(String prompt) agentOutput = (prompt) => [
-        jsonEncode({'event': 'init', 'cwd': '/home/dev/project', 'permission_mode': 'request-review'}),
-        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 0, 'state': 'DONE', 'step_type': 'user_input'}),
-        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 1, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Sure! Looking at the project.'}),
-        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 1, 'state': 'DONE', 'step_type': 'agent_response'}),
-        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'command': 'ls -la'}}}),
-        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 2, 'state': 'DONE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'command': 'ls -la'}, 'output': 'lib\npubspec.yaml'}}),
-        jsonEncode({'event': 'step_update', 'conversation_id': 'conv-1', 'step_index': 3, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'It is a **Flutter** app.'}),
-        jsonEncode({'event': 'result', 'conversation_id': 'conv-1', 'status': 'SUCCESS', 'response': 'Sure! Looking at the project.It is a **Flutter** app.', 'usage': {'input_tokens': 900, 'output_tokens': 40}}),
+        jsonEncode({'event': 'init', 'init': {'cwd': '/home/dev/project', 'permission_mode': 'request-review'}}),
+        jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 0, 'state': 'DONE', 'step_type': 'user_input'}}),
+        jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 1, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'Sure! Looking at the project.'}}),
+        jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 1, 'state': 'DONE', 'step_type': 'agent_response'}}),
+        jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 2, 'state': 'ACTIVE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'command': 'ls -la'}}}}),
+        jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 2, 'state': 'DONE', 'step_type': 'tool', 'tool_name': 'run_command', 'tool_info': {'name': 'run_command', 'parameters': {'command': 'ls -la'}, 'output': 'lib\npubspec.yaml'}}}),
+        jsonEncode({'event': 'step_update', 'step_update': {'conversation_id': 'conv-1', 'step_index': 3, 'state': 'ACTIVE', 'step_type': 'agent_response', 'text_delta': 'It is a **Flutter** app.'}}),
+        jsonEncode({'event': 'result', 'result': {'conversation_id': 'conv-1', 'status': 'SUCCESS', 'response': 'Sure! Looking at the project.It is a **Flutter** app.', 'usage': {'input_tokens': 900, 'output_tokens': 40}}}),
       ];
 
   /// Extra stderr the agent prints (e.g. soft-denied tool notices).
@@ -43,8 +43,8 @@ class FakeHost implements RemoteHost {
   }
 
   CommandResult _answer(String script) {
-    if (script.contains('-type d -name')) {
-      return const CommandResult(0, '120\t/home/dev/.gemini/antigravity/brain/conv-1/task.md\n', '');
+    if (script.contains('metadata.json')) {
+      return const CommandResult(0, '120\t/home/dev/.gemini/antigravity-cli/brain/conv-1/task.md\n', '');
     }
     if (script.contains('echo "os=')) {
       return CommandResult(0, [

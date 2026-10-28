@@ -3,6 +3,25 @@ import 'dart:convert';
 import '../models/conversation.dart';
 import 'agent_stream_parser.dart';
 
+/// Formats a slash-command report from agy (`/usage`, `/model`…) for the
+/// chat. Its rows are tab-separated (`name<TAB>value`); markdown passes
+/// through unchanged.
+String commandReportMarkdown(String report) {
+  final lines = const LineSplitter().convert(report.trimRight());
+  final tabbed = lines.where((l) => l.contains('\t')).length;
+  if (lines.isEmpty || tabbed < (lines.length + 1) ~/ 2) return report;
+  String cell(String c) => c.trim().replaceAll('|', '\\|');
+  final rows = lines.where((l) => l.trim().isNotEmpty).map((l) => l.split('\t').map(cell).toList()).toList();
+  final width = rows.fold<int>(0, (w, r) => r.length > w ? r.length : w);
+  final out = StringBuffer();
+  for (var i = 0; i < rows.length; i++) {
+    final r = [...rows[i], for (var k = rows[i].length; k < width; k++) ''];
+    out.writeln('| ${r.join(' | ')} |');
+    if (i == 0) out.writeln('|${List.filled(width, ' --- ').join('|')}|');
+  }
+  return out.toString();
+}
+
 /// Applies [AgentEvent]s to an agent [ChatMessage], merging deltas into
 /// blocks and pairing tool results with their calls.
 class MessageBuilder {
@@ -16,6 +35,9 @@ class MessageBuilder {
   /// The final `result` status (SUCCESS, ERROR, CANCELED, …), if reported.
   String? resultStatus;
   bool resultCancelled = false;
+
+  /// Tools headless mode auto-denied, from the final result.
+  List<String> deniedActions = const [];
 
   /// True while the last text/thinking part is being built from deltas, so a
   /// following full block of the same kind replaces it instead of repeating.
@@ -126,15 +148,22 @@ class MessageBuilder {
         resultStatus = event.status;
         resultCancelled = event.isCancelled;
         if (usage != null) message.usage = usage;
-        if (response != null && response.trim().isNotEmpty) {
+        if (event.deniedActions.isNotEmpty) deniedActions = event.deniedActions;
+        if (event.command != null && response != null && response.trim().isNotEmpty) {
+          message.parts.add(MessagePart(kind: PartKind.text, text: commandReportMarkdown(response)));
+        } else if (response != null && response.trim().isNotEmpty) {
           final shown = message.parts
               .where((p) => p.kind == PartKind.text)
               .map((p) => p.text)
               .join('\n');
           String squash(String x) => x.replaceAll(RegExp(r'\s+'), '');
           // The final response often repeats the streamed text, possibly
-          // joined differently.
-          if (!shown.contains(response.trim()) && squash(shown) != squash(response)) {
+          // joined differently, or after text replayed from earlier (agy
+          // includes a subagent's first turn when its chat is continued).
+          final streamed = squash(shown);
+          if (!shown.contains(response.trim()) &&
+              streamed != squash(response) &&
+              !(streamed.isNotEmpty && squash(response).endsWith(streamed))) {
             final last = _last;
             if (last != null &&
                 last.kind == PartKind.text &&

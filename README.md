@@ -84,16 +84,23 @@ over SSH.
 | --- | --- |
 | Chat replies | `agy -p "<prompt>" --output-format stream-json --print-timeout 0s [--conversation id] [--mode/--model/--effort/--agent/--add-dir …]` in the chat's folder. Detached on POSIX, streamed with `tail -f`, resumable by byte offset |
 | Sign-in, `/config`, approvals | Interactive `agy` in a PTY (`tmux new-session -A` when available) |
-| Models | `agy models` |
+| Models | `agy models` (`id<TAB>name` lines) |
+| Quota, credits, skills, effort levels | `agy -p /usage` (and `/credits`, `/skills`, `/hooks`, `/help`, `/effort`) with `--output-format stream-json`: agy answers these itself |
 | Install | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (or `install.ps1` on Windows) |
 | API key | Sent over **stdin** into `~/.antigravity-mobile/env` (mode 600), never on a command line. `modelProvider: "gemini"` is set in `~/.gemini/antigravity-cli/settings.json` |
 | Files / git | `find`/`head`/`base64`/`git` over SSH exec channels |
 
-Replies are parsed from agy's documented headless `stream-json` events:
-`init`, `step_update` (streamed `text_delta`, `tool` steps with
-`tool_info`, `subagent_info`) and the final `result` (status, response,
-usage). `lib/services/agent_stream_parser.dart` also accepts other common
-agent-CLI shapes as a fallback.
+Replies are parsed from agy's headless `stream-json` events: `init`,
+`step_update` (streamed `text_delta`, `tool` steps with `tool_info`,
+`subagent` steps with `subagent_info`), `command_result` and the final
+`result` (status, response, usage, `denied_actions`). agy 1.4.9 nests each
+payload under its event name (`{"event":"result","result":{…}}`). The parser
+was checked against output recorded from the real binary
+(`test/fixtures/agy_1_4_9`); it also accepts the flat shape in the docs and
+other common agent-CLI shapes as a fallback.
+
+Artifacts are the files the agent writes to agy's artifact directory,
+`~/.gemini/antigravity-cli/brain/<conversation id>/`.
 
 Headless runs can't stop to ask for approval. Edits inside the project are
 allowed, while shell, web and MCP tools are skipped unless your
@@ -149,8 +156,9 @@ flutter analyze
 flutter test                     # unit + widget tests
 ```
 
-The integration tests need an SSH server you control with the fake agy
-installed:
+`test/unit/real_agy_output_test.dart` replays output recorded from the real
+agy 1.4.9 binary. The integration tests need an SSH server you control with
+the fake agy installed:
 
 ```sh
 # on the test server, for a throwaway user:
@@ -160,8 +168,15 @@ mkdir ~/project && cd ~/project && git init && echo hello > readme.md \
 
 # locally:
 AGM_SSH_TEST_KEY=path/to/private_key AGM_SSH_TEST_HOST=host \
-AGM_SSH_TEST_PORT=22 AGM_SSH_TEST_USER=user flutter test test/integration
+AGM_SSH_TEST_PORT=22 AGM_SSH_TEST_USER=user flutter test test/integration/ssh_integration_test.dart
 ```
+
+`test/integration/real_agy_test.dart` runs the same pipeline against the
+**real** agy (`AGM_REAL_AGY=1`). Without a Google account to spare, point agy
+at `tool/mock_gemini.py`, a scripted stand-in for the Gemini API:
+`modelProvider: "gemini"` in `~/.gemini/antigravity-cli/settings.json`, and
+`export GEMINI_API_KEY=dummy GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8765` in
+`~/.antigravity-mobile/env`.
 
 ## Limitations
 

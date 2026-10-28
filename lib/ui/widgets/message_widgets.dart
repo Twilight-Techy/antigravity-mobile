@@ -7,6 +7,7 @@ import '../../models/conversation.dart';
 import '../../services/agent_stream_parser.dart';
 import '../../state/chat_controller.dart';
 import '../../state/session_state.dart';
+import '../../state/terminal_session.dart';
 import '../screens/agent_settings_screen.dart';
 import '../screens/artifacts_screen.dart';
 import '../theme/app_theme.dart';
@@ -205,6 +206,8 @@ class _PartView extends StatelessWidget {
         return _SubagentCard(part: part);
       case PartKind.notice when part.toolName == permissionsNotice:
         return _SkippedToolsCard(part: part);
+      case PartKind.notice when part.toolName == signInNotice:
+        return const _SignInCard();
       case PartKind.notice:
         return _Collapsible(
           icon: Icons.notes,
@@ -526,6 +529,49 @@ class _SubagentCard extends StatelessWidget {
                   label: const Text('View log'),
                 ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// agy on the server isn't signed in: a shortcut back to setup.
+class _SignInCard extends StatelessWidget {
+  const _SignInCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 4),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.login, size: 18, color: AppColors.warning),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text('agy isn\'t signed in on this server',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () async {
+                final session = context.read<SessionState>();
+                await context.read<TerminalSession>().stop();
+                await session.reopenSetup();
+              },
+              child: const Text('Sign in'),
+            ),
           ),
         ],
       ),

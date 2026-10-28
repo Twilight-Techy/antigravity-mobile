@@ -35,8 +35,8 @@ extension PermissionModeLabel on PermissionMode {
       };
 }
 
-/// `--effort`; `max` is model-dependent.
-enum Effort { auto, low, medium, high, max }
+/// `--effort`. Which levels apply depends on the model (`agy -p /effort`).
+enum Effort { auto, low, medium, high, xhigh, max }
 
 class AgentOptions {
   const AgentOptions({

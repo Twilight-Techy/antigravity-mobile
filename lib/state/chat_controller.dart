@@ -28,6 +28,16 @@ List<String> skippedTools(String stderr) => stderr
     .take(10)
     .toList();
 
+const signInNotice = 'sign-in';
+
+/// agy's headless runs fail like this when the server isn't signed in.
+bool needsSignIn(String error) =>
+    RegExp(r'authentication (failed|required)|not logged in|please sign in', caseSensitive: false).hasMatch(error);
+
+/// agy's stderr without its machine-readable `AGY_ERROR: {…}` line.
+String agyStderr(String stderr) =>
+    stderr.split('\n').where((l) => !l.startsWith('AGY_ERROR:')).join('\n').trim();
+
 /// Last path segment, handling both separators.
 String workspaceName(String path) {
   final parts = path.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).toList();
@@ -69,7 +79,6 @@ class ChatController extends ChangeNotifier {
 
   AgentRun? _run;
   MessageBuilder? _builder;
-  final _parser = AgentStreamParser();
   Timer? _notifyTimer;
   Timer? _saveTimer;
   int _lastGeneration = 0;
@@ -349,6 +358,7 @@ class ChatController extends ChangeNotifier {
       _builder = MessageBuilder(reply);
     }
     final builder = _builder!;
+    final parser = AgentStreamParser(resumed: resuming && reply.runOffset > 0);
     run.events.listen((event) {
       switch (event) {
         case RunLine(:final line, :final offset):
@@ -357,7 +367,7 @@ class ChatController extends ChangeNotifier {
           if (reply.status == MessageStatus.pending) {
             reply.status = MessageStatus.streaming;
           }
-          for (final e in _parser.parseLine(line)) {
+          for (final e in parser.parseLine(line)) {
             builder.apply(e);
           }
           _scheduleNotify();
@@ -373,7 +383,7 @@ class ChatController extends ChangeNotifier {
             } else {
               reply.status = MessageStatus.error;
               if (!reply.parts.any((p) => p.kind == PartKind.error)) {
-                final detail = stderr.trim();
+                final detail = agyStderr(stderr);
                 reply.parts.add(MessagePart(
                   kind: PartKind.error,
                   text: detail.isEmpty ? 'agy exited with code $code.' : detail,
@@ -386,7 +396,10 @@ class ChatController extends ChangeNotifier {
                 ? MessageStatus.error
                 : MessageStatus.done;
           }
-          final skipped = skippedTools(stderr);
+          if (reply.parts.any((p) => p.kind == PartKind.error && needsSignIn(p.text))) {
+            reply.parts.add(MessagePart(kind: PartKind.notice, toolName: signInNotice, text: ''));
+          }
+          final skipped = builder.deniedActions.isNotEmpty ? builder.deniedActions : skippedTools(stderr);
           if (skipped.isNotEmpty) {
             reply.parts.add(MessagePart(
               kind: PartKind.notice,

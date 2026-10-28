@@ -272,8 +272,9 @@ head -c $maxBytes -- "\$F" | base64
 
   @override
   String findArtifacts(String conversationId) => wrap('''
-find "\$HOME/.gemini" -maxdepth 6 -type d -name ${quote(conversationId)} 2>/dev/null | head -n 5 | while IFS= read -r d; do
-  find "\$d" -maxdepth 3 -type f \\( -name '*.md' -o -name '*.markdown' -o -name '*.txt' -o -name '*.json' -o -name '*.html' \\) 2>/dev/null
+for d in "\$HOME/.gemini/antigravity-cli/brain/"${quote(conversationId)} "\$HOME/.gemini/antigravity/brain/"${quote(conversationId)}; do
+  [ -d "\$d" ] || continue
+  find "\$d" -mindepth 1 -maxdepth 3 \\( -name '.*' -o -name scratch \\) -prune -o -type f \\( -name '*.md' -o -name '*.markdown' -o -name '*.txt' -o -name '*.json' -o -name '*.html' \\) ! -name '*.metadata.json' -print 2>/dev/null
 done | head -n 200 | while IFS= read -r f; do
   printf '%s\\t%s\\n' "\$(wc -c < "\$f" | tr -d ' ')" "\$f"
 done
@@ -622,13 +623,18 @@ try {
 
   @override
   String findArtifacts(String conversationId) => wrap('''
-\$root = "\$env:USERPROFILE\\.gemini"
-if (-not (Test-Path -LiteralPath \$root)) { exit 0 }
-Get-ChildItem -LiteralPath \$root -Recurse -Depth 6 -Directory -Filter ${quote(conversationId)} -ErrorAction SilentlyContinue |
-  Select-Object -First 5 |
-  ForEach-Object { Get-ChildItem -LiteralPath \$_.FullName -Recurse -Depth 3 -File -Include *.md,*.markdown,*.txt,*.json,*.html -ErrorAction SilentlyContinue } |
-  Select-Object -First 200 |
-  ForEach-Object { "\$(\$_.Length)`t\$(\$_.FullName)" }
+foreach (\$app in @('antigravity-cli', 'antigravity')) {
+  \$d = Join-Path \$env:USERPROFILE ".gemini\\\$app\\brain\\$conversationId"
+  if (-not (Test-Path -LiteralPath \$d)) { continue }
+  Get-ChildItem -LiteralPath \$d -Recurse -Depth 2 -File -Include *.md,*.markdown,*.txt,*.json,*.html -ErrorAction SilentlyContinue |
+    Where-Object {
+      \$rel = \$_.FullName.Substring(\$d.Length + 1)
+      -not (\$rel -split '[\\\\/]' | Where-Object { \$_.StartsWith('.') -or \$_ -eq 'scratch' }) -and
+      -not \$_.Name.EndsWith('.metadata.json')
+    } |
+    Select-Object -First 200 |
+    ForEach-Object { "\$(\$_.Length)`t\$(\$_.FullName)" }
+}
 ''');
 
   @override

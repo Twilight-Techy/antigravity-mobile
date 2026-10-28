@@ -1,0 +1,1 @@
+error: /diff is not available in print mode (it opens the interactive diff viewer); pass --disable-slash-commands to send /diff to the model as literal text

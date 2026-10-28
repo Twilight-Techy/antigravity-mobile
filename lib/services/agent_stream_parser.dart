@@ -56,21 +56,41 @@ class ErrorEvent extends AgentEvent {
 
 /// The final envelope: `{conversation_id, status, response, usage}`.
 class ResultEvent extends AgentEvent {
-  const ResultEvent({this.response, this.status, this.usage, this.conversationId});
+  const ResultEvent({
+    this.response,
+    this.status,
+    this.usage,
+    this.conversationId,
+    this.deniedActions = const [],
+    this.command,
+    this.error,
+  });
   final String? response;
   final String? status;
   final String? usage;
   final String? conversationId;
+
+  /// Tools headless mode auto-denied (`result.denied_actions`), e.g.
+  /// `RunCommand (command)`.
+  final List<String> deniedActions;
+
+  /// Set when the run was a slash command answered by agy itself (`/usage`,
+  /// `/credits`, `/model`…): its name, and [response] is the report.
+  final String? command;
+
+  /// The `error`, when the result carried one.
+  final String? error;
 
   bool get isError {
     final s = status?.toLowerCase();
     return s != null && (s.contains('error') || s.contains('fail') || s == 'invalid');
   }
 
-  /// `CANCELED` / `INTERRUPTED` (e.g. SIGINT).
+  /// `CANCELED` / `INTERRUPTED`, or how agy 1.4.9 reports SIGINT: status
+  /// `ERROR` with the error `interrupted`.
   bool get isCancelled {
     final s = status?.toLowerCase();
-    return s == 'canceled' || s == 'cancelled' || s == 'interrupted';
+    return s == 'canceled' || s == 'cancelled' || s == 'interrupted' || error?.trim().toLowerCase() == 'interrupted';
   }
 }
 
@@ -119,6 +139,17 @@ class RawLine extends AgentEvent {
 /// events, Anthropic-style content blocks, OpenAI-style function calls) and
 /// falls back to any `text`/`content`/`response` field it can find.
 class AgentStreamParser {
+  /// [resumed]: the stream is being picked up mid-run (from a byte offset),
+  /// so it won't start with the run's own `user_input` step.
+  AgentStreamParser({bool resumed = false}) : _sawUserInput = resumed;
+
+  /// Opening another agent's conversation (a subagent's) replays its first
+  /// turn, which began with a system message, before our `user_input`
+  /// step. Those steps are held back and dropped once our input shows up.
+  bool _sawUserInput;
+  bool _sawStep = false;
+  final _heldBack = <AgentEvent>[];
+
   static const _conversationKeys = [
     'conversation_id',
     'conversationId',
@@ -154,11 +185,24 @@ class AgentStreamParser {
 
     final convId = _findConversationId(m);
 
-    // The documented agy schema: `event` is init | step_update | result.
-    if (m['event'] == 'init') {
-      return [SessionEvent(conversationId: convId, model: _str(m['model']))];
+    // agy's schema: `event` is init | step_update | command_result | result,
+    // with the payload under a key of the same name (older builds put the
+    // fields at the top level).
+    final event = m['event'];
+    if (event is String) {
+      final payload = m[event] is Map ? Map<String, dynamic>.from(m[event] as Map) : m;
+      switch (event) {
+        case 'init':
+          return [SessionEvent(conversationId: convId, model: _str(payload['model']))];
+        case 'step_update':
+          return _stepUpdate(payload, _str(payload['conversation_id']) ?? convId);
+        case 'command_result':
+          // The `result` line that follows carries the same report as text.
+          return const [];
+        case 'result':
+          if (m[event] is Map) return _agyResult(payload);
+      }
     }
-    if (m['event'] == 'step_update') return _stepUpdate(m, convId);
 
     // Final result envelope (also the whole output of --output-format json).
     final isResult = type == 'result' ||
@@ -321,13 +365,29 @@ class AgentStreamParser {
   }
 
   /// `step_update`: one step of the turn. `step_type` is `user_input`,
-  /// `agent_response` (streamed via `text_delta`), `tool` (with `tool_info`)
-  /// or `checkpoint`; `state` is `ACTIVE` until the final `DONE`.
+  /// `agent_response` (streamed via `text_delta`), `tool` (with `tool_info`),
+  /// `subagent` (with `subagent_info`), `system_message`, `error_message`
+  /// or `checkpoint`; `state` is `ACTIVE` until it ends as `DONE` or
+  /// `ERROR`.
   List<AgentEvent> _stepUpdate(Map<String, dynamic> m, String? convId) {
-    final events = <AgentEvent>[if (convId != null) SessionEvent(conversationId: convId)];
+    final session = <AgentEvent>[if (convId != null) SessionEvent(conversationId: convId)];
+    final events = <AgentEvent>[];
     final stepType = _str(m['step_type'])?.toLowerCase() ?? '';
-    final done = _str(m['state'])?.toUpperCase() == 'DONE';
+    final state = _str(m['state'])?.toUpperCase() ?? '';
+    final ended = state == 'DONE' || state == 'ERROR';
     final id = 'step-${m['step_index'] ?? ''}';
+    final firstStep = !_sawStep;
+    _sawStep = true;
+    if (stepType == 'user_input') {
+      _sawUserInput = true;
+      _heldBack.clear();
+      return session;
+    }
+    if (firstStep && !_sawUserInput && stepType != 'system_message') {
+      // A normal run starts with its user_input; anything else first is a
+      // replay we don't hold back for (e.g. a plain stream).
+      _sawUserInput = true;
+    }
     switch (stepType) {
       case 'agent_response':
         final delta = _str(m['text_delta']);
@@ -335,16 +395,24 @@ class AgentStreamParser {
       case 'tool':
         final info = m['tool_info'] is Map ? Map<String, dynamic>.from(m['tool_info'] as Map) : const <String, dynamic>{};
         final name = _str(info['name'] ?? m['tool_name']) ?? 'tool';
-        events.add(ToolCallEvent(id: id, name: name, input: _pretty(info['parameters'])));
-        if (done) {
+        final params = info['parameters'];
+        events.add(ToolCallEvent(id: id, name: name, input: _pretty(params)));
+        if (ended) {
           final error = info['error'];
           events.add(ToolResultEvent(
             id: id,
             name: name,
             output: error != null ? _errorText(error) : _textOf(info['output']),
-            isError: error != null,
+            isError: error != null || state == 'ERROR',
           ));
+          if (state == 'DONE') {
+            final artifact = _artifactFromTool(name, params);
+            if (artifact != null) events.add(artifact);
+          }
         }
+      case 'error_message':
+        final text = _str(m['text_delta'] ?? m['error'] ?? m['message']);
+        if (text != null && text.isNotEmpty) events.add(ErrorEvent(text));
     }
     final sub = m['subagent_info'];
     if (sub is Map && sub['subagents'] is List) {
@@ -354,6 +422,76 @@ class AgentStreamParser {
           .toList();
       if (list.isNotEmpty) events.add(SubagentEvent(list));
     }
+    if (!_sawUserInput) {
+      _heldBack.addAll(events);
+      return session;
+    }
+    return [...session, ...events];
+  }
+
+  static const _fileWriteTools = {
+    'write_file',
+    'edit_file',
+    'write_to_file',
+    'replace_file_content',
+    'multi_replace_file_content',
+  };
+
+  /// Files written to agy's artifact directory
+  /// (`<appDataDir>/brain/<conversation-id>/`) are artifacts.
+  ArtifactEvent? _artifactFromTool(String name, Object? params) {
+    if (!_fileWriteTools.contains(name) || params is! Map) return null;
+    final path = _str(params['Path'] ?? params['TargetFile'] ?? params['path'] ?? params['file_path']);
+    if (path == null || !isArtifactPath(path)) return null;
+    return ArtifactEvent(name: path.split(RegExp(r'[\\/]')).last, path: path);
+  }
+
+  /// Whether [path] is a user-facing file in an agy artifact directory, not
+  /// its scratch files, uploads or generated logs.
+  static bool isArtifactPath(String path) {
+    final parts = path.split(RegExp(r'[\\/]'));
+    final brain = parts.lastIndexOf('brain');
+    if (brain < 0 || parts.length < brain + 3) return false;
+    final inner = parts.sublist(brain + 2);
+    if (inner.any((p) => p.startsWith('.') || p == 'scratch')) return false;
+    return !inner.last.endsWith('.metadata.json');
+  }
+
+  /// agy's final `result` payload.
+  List<AgentEvent> _agyResult(Map<String, dynamic> r) {
+    final events = <AgentEvent>[];
+    if (!_sawUserInput) {
+      // Never saw our input, so nothing was a replay after all.
+      events.addAll(_heldBack);
+      _heldBack.clear();
+    }
+    final convId = _str(r['conversation_id']);
+    final error = r['error'];
+    final errorText = error != null && _textOf(error)?.isNotEmpty == true ? _errorText(error) : null;
+    final cancelled = errorText?.trim().toLowerCase() == 'interrupted';
+    if (errorText != null && !cancelled) events.add(ErrorEvent(errorText));
+    final denied = <String>[];
+    if (r['denied_actions'] is List) {
+      for (final d in (r['denied_actions'] as List).whereType<Map>()) {
+        final action = _str(d['action']);
+        final display = _str(d['display_name']);
+        final label = [
+          if (display != null) display,
+          if (action != null && action != display) '($action)',
+        ].join(' ');
+        if (label.isNotEmpty && !denied.contains(label)) denied.add(label);
+      }
+    }
+    final command = r['command'] is Map ? _str((r['command'] as Map)['name']) : null;
+    events.add(ResultEvent(
+      response: _str(r['response']),
+      status: _str(r['status']),
+      usage: _usageSummary(r['usage']),
+      conversationId: convId == null || convId.isEmpty ? null : convId,
+      deniedActions: denied,
+      command: command,
+      error: errorText,
+    ));
     return events;
   }
 
