@@ -189,6 +189,8 @@ void main() {
 
   test('a terminal session outlives its connection', () async {
     final agy = await service();
+    // The first time, the ConPTY helper is compiled on the server.
+    expect(await agy.ensurePtyHelper(), isTrue);
     final command = agy.scripts.terminal(
         cwd: project.path, runAgy: true, agyArgs: const [], tmuxSession: 'agm-test-${DateTime.now().millisecondsSinceEpoch}');
     final ansi = RegExp(r'\x1B(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(\x07|\x1B\\)|[()=>][0-9A-Za-z]?)');
@@ -208,9 +210,8 @@ void main() {
       fail('"$text" not in: ${out.toString().replaceAll(ansi, '')}');
     }
 
-    // The first start compiles the ConPTY helper.
     final (first, out1) = await attach();
-    await waitFor(out1, 'interactive fake agy', seconds: 120);
+    await waitFor(out1, 'interactive fake agy', seconds: 60);
     first.write(utf8.encode('hello\r'));
     await waitFor(out1, 'got hello');
 

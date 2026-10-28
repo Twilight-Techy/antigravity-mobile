@@ -100,6 +100,8 @@ class TerminalSession extends ChangeNotifier {
     _dir = session.workspace;
     _extraArgs = extraArgs;
     _persist = persist;
+    var tmuxSession = mode == TerminalMode.agy && persist ? tmuxSessionName : null;
+    if (tmuxSession != null && !await agy.ensurePtyHelper()) tmuxSession = null;
     final command = agy.scripts.terminal(
       cwd: session.workspace ?? '~',
       runAgy: mode == TerminalMode.agy,
@@ -109,7 +111,7 @@ class TerminalSession extends ChangeNotifier {
         if (_conversationId != null) ...['--conversation', _conversationId!],
         ...extraArgs,
       ],
-      tmuxSession: mode == TerminalMode.agy && persist ? tmuxSessionName : null,
+      tmuxSession: tmuxSession,
     );
     try {
       final pty = await agy.host.startPty(command, columns: _columns, rows: _rows);

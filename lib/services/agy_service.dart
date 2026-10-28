@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'remote_host.dart';
 import 'remote_scripts.dart';
+import 'windows_pty.dart';
 
 class HostInfo {
   const HostInfo({
@@ -459,6 +460,23 @@ class AgyService {
       return AgyReport(command, error: e.toString());
     }
     return AgyReport.parse(command, r.stdout);
+  }
+
+  bool _ptyHelperReady = false;
+
+  /// Makes sure the Windows terminal-session helper is compiled on the
+  /// server. Returns false if it couldn't be (the terminal then runs
+  /// without a persistent session).
+  Future<bool> ensurePtyHelper() async {
+    if (!scripts.isWindows || _ptyHelperReady) return true;
+    try {
+      final r = await host.runWithInput(scripts.installPtyHelper(), windowsPtySource,
+          timeout: const Duration(minutes: 2));
+      _ptyHelperReady = r.ok && r.stdout.contains('ready');
+    } catch (_) {
+      _ptyHelperReady = false;
+    }
+    return _ptyHelperReady;
   }
 
   /// Every agy conversation on the server, from the CLI's and the desktop

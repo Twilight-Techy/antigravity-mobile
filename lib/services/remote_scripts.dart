@@ -81,6 +81,10 @@ abstract class RemoteScripts {
   /// after agy conversation [conversationId] (where agy keeps artifacts).
   String findArtifacts(String conversationId);
 
+  /// Compiles the Windows terminal-session helper from the C# source sent
+  /// on stdin, once (POSIX servers use tmux and need nothing).
+  String installPtyHelper();
+
   /// Lists agy's conversations from its stores under ~/.gemini (the CLI's
   /// `antigravity-cli` and the desktop app's `antigravity`): JSON lines
   /// from agy's conversation index when python3 can read it, otherwise
@@ -317,6 +321,9 @@ done | head -n 200 | while IFS= read -r f; do
   printf '%s\\t%s\\n' "\$(wc -c < "\$f" | tr -d ' ')" "\$f"
 done
 ''');
+
+  @override
+  String installPtyHelper() => wrap(':');
 
   @override
   String listConversations() => wrap('''
@@ -991,6 +998,22 @@ ${runAgy ? '& agy ${agyArgs.map(quote).join(' ')}' : ''}
         '-EncodedCommand ${base64.encode(units)}';
   }
 
+  /// Compiles [windowsPtySource] (sent on stdin; too long for a command
+  /// line) into `~\.antigravity-mobile\agmpty-<version>.dll`.
+  @override
+  String installPtyHelper() => wrap('''
+\$ErrorActionPreference = "Stop"
+\$dir = "\$env:USERPROFILE\\.antigravity-mobile"
+New-Item -ItemType Directory -Force -Path \$dir | Out-Null
+\$dll = Join-Path (Resolve-Path -LiteralPath \$dir).Path "agmpty-$_ptyVersion.dll"
+if (Test-Path -LiteralPath \$dll) { "ready"; exit 0 }
+\$src = [Console]::In.ReadToEnd()
+\$tmp = "\$dll.\$PID.tmp"
+Add-Type -TypeDefinition \$src -ReferencedAssemblies System.Core -OutputAssembly \$tmp -OutputType Library
+Move-Item -LiteralPath \$tmp -Destination \$dll -Force -ErrorAction SilentlyContinue
+"ready"
+''');
+
   /// The terminal in a session that survives the connection, like tmux:
   /// a ConPTY host started through WMI (outside the SSH session) runs the
   /// program, and this session attaches to it over a named pipe
@@ -1014,11 +1037,7 @@ ${_env()}
 \$dir = "\$env:USERPROFILE\\.antigravity-mobile"
 New-Item -ItemType Directory -Force -Path \$dir | Out-Null
 \$dll = Join-Path (Resolve-Path -LiteralPath \$dir).Path "agmpty-$_ptyVersion.dll"
-if (-not (Test-Path -LiteralPath \$dll)) {
-  \$tmp = "\$dll.\$PID.tmp"
-  Add-Type -TypeDefinition (${_decode(windowsPtySource)}) -ReferencedAssemblies System.Core -OutputAssembly \$tmp -OutputType Library
-  Move-Item -LiteralPath \$tmp -Destination \$dll -Force -ErrorAction SilentlyContinue
-}
+if (-not (Test-Path -LiteralPath \$dll)) { [Console]::Error.WriteLine("The terminal helper is not installed."); exit 1 }
 Add-Type -Path \$dll
 \$name = "agm-\$(\$env:USERNAME)-" + ${quote(session)}
 function Test-Session { [AgmPty.Client]::Exists(\$name) }
