@@ -272,7 +272,8 @@ class AgyService {
     for (var line in const LineSplitter().convert(output)) {
       line = line.replaceAll(RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]'), '').trim();
       if (line.isEmpty) continue;
-      if (RegExp(r'^[-=+|─━┄┈╌]+$').hasMatch(line.replaceAll(' ', ''))) continue;
+      // Table borders and rules (ASCII or box-drawing characters).
+      if (RegExp(r'^[-=+|:\u2500-\u257F]+$').hasMatch(line.replaceAll(' ', ''))) continue;
       line = line.replaceFirst(RegExp(r'^([*•\-–>]|\d+[.)])\s+'), '');
       line = line.replaceAll('│', '|');
       if (line.contains('|')) {
