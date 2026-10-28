@@ -1028,8 +1028,14 @@ Move-Item -LiteralPath \$tmp -Destination \$dll -Force -ErrorAction SilentlyCont
 \$k = "\$H\\.antigravity-mobile\\gemini_api_key"
 if (Test-Path -LiteralPath \$k) { \$env:GEMINI_API_KEY = (Get-Content -Raw -LiteralPath \$k).Trim() }
 \$env:Path = '__AGM_PATH__'
-Add-Type -Path '__AGM_DLL__'
-exit ([AgmPty.Host]::Run('__AGM_NAME__', '__AGM_LINE__', '__AGM_CWD__', 120, 40))
+try {
+  Add-Type -Path '__AGM_DLL__'
+  exit ([AgmPty.Host]::Run('__AGM_NAME__', '__AGM_LINE__', '__AGM_CWD__', 120, 40))
+} catch {
+  # Runs hidden: leave the reason where the next attach can show it.
+  "\$(Get-Date -Format o) \$_" | Out-File -LiteralPath '__AGM_LOG__' -Append
+  exit 1
+}
 ''';
     return wrap('''
 ${_env()}
@@ -1047,7 +1053,7 @@ if (-not (Test-Session)) {
   ${runAgy ? '\$line = \'"\' + (Get-Command agy).Source + \'" \' + ${quote(args)}' : r"$line = 'powershell.exe -NoLogo'"}
   \$q = { param(\$v) \$v.Replace("'", "''") }
   \$hostScript = ${_decode(hostScript)}
-  \$hostScript = \$hostScript.Replace('__AGM_HOME__', (& \$q \$env:USERPROFILE)).Replace('__AGM_PATH__', (& \$q \$env:Path)).Replace('__AGM_DLL__', (& \$q \$dll)).Replace('__AGM_NAME__', (& \$q \$name)).Replace('__AGM_LINE__', (& \$q \$line)).Replace('__AGM_CWD__', (& \$q \$cwd))
+  \$hostScript = \$hostScript.Replace('__AGM_HOME__', (& \$q \$env:USERPROFILE)).Replace('__AGM_PATH__', (& \$q \$env:Path)).Replace('__AGM_DLL__', (& \$q \$dll)).Replace('__AGM_NAME__', (& \$q \$name)).Replace('__AGM_LINE__', (& \$q \$line)).Replace('__AGM_CWD__', (& \$q \$cwd)).Replace('__AGM_LOG__', (& \$q "\$dir\\agmpty.log"))
   \$cmd = "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(\$hostScript))
   \$started = \$false
   try {
@@ -1057,6 +1063,11 @@ if (-not (Test-Session)) {
   if (-not \$started) { Start-Process -FilePath powershell -ArgumentList \$cmd.Substring(11) -WindowStyle Hidden | Out-Null }
   \$i = 0
   while (-not (Test-Session) -and \$i -lt 150) { Start-Sleep -Milliseconds 100; \$i++ }
+  if (-not (Test-Session)) {
+    [Console]::Error.WriteLine("The terminal session did not start.")
+    if (Test-Path -LiteralPath "\$dir\\agmpty.log") { Get-Content -LiteralPath "\$dir\\agmpty.log" -Tail 5 | ForEach-Object { [Console]::Error.WriteLine(\$_) } }
+    exit 1
+  }
 }
 exit ([AgmPty.Client]::Attach(\$name))
 ''');

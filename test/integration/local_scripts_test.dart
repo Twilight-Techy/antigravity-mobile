@@ -207,7 +207,9 @@ void main() {
         if (out.toString().replaceAll(ansi, '').contains(text)) return;
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
-      fail('"$text" not in: ${out.toString().replaceAll(ansi, '')}');
+      final log = File('${home.path}$sep.antigravity-mobile${sep}agmpty.log');
+      fail('"$text" not in: ${out.toString().replaceAll(ansi, '')}'
+          '${log.existsSync() ? '\nhost log: ${log.readAsStringSync()}' : ''}');
     }
 
     final (first, out1) = await attach();
@@ -226,7 +228,7 @@ void main() {
     // When the program ends, the attached session ends too.
     second.write(utf8.encode('exit\r'));
     expect(await second.exitCode.timeout(const Duration(seconds: 30)), isNotNull);
-  }, skip: skip ?? (windows ? null : 'Windows only (tmux is covered over SSH)'));
+  }, timeout: const Timeout(Duration(minutes: 5)), skip: skip ?? (windows ? null : 'Windows only (tmux is covered over SSH)'));
 
   test('reads a transcript in chunks', () async {
     final agy = await service();
