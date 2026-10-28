@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:antigravity_mobile/main.dart';
+import 'package:antigravity_mobile/models/conversation.dart';
 import 'package:antigravity_mobile/models/server_profile.dart';
 import 'package:antigravity_mobile/services/remote_host.dart';
 import 'package:antigravity_mobile/services/ssh_host.dart';
@@ -146,6 +149,50 @@ void main() {
     await tester.tap(find.text('Continue anyway'));
     await settle(tester);
     expect(find.text('Open a workspace'), findsOneWidget);
+  });
+
+  testWidgets('a reply that was streaming when the app closed resumes from its offset', (tester) async {
+    final profile = ServerProfile(id: 'p1', name: 'VPS', host: 'h', username: 'dev', recentWorkspaces: ['/home/dev/project']);
+    await storage.saveProfiles([profile]);
+    await storage.saveSecrets('p1', const ServerSecrets(password: 'x'));
+    await storage.trustHostKey('h:22', 'SHA256:abc123');
+    await storage.saveConversation(Conversation(
+      id: 'c1',
+      serverId: 'p1',
+      workspace: '/home/dev/project',
+      title: 'Earlier',
+      createdAt: DateTime(2026),
+      messages: [
+        ChatMessage(id: 'u', role: MessageRole.user, createdAt: DateTime(2026),
+            parts: [MessagePart(kind: PartKind.text, text: 'Refactor it')]),
+        ChatMessage(id: 'a', role: MessageRole.agent, createdAt: DateTime(2026),
+            status: MessageStatus.streaming, runId: 'run-9', runOffset: 120,
+            parts: [MessagePart(kind: PartKind.text, text: 'Starting the refactor.')]),
+      ],
+    ));
+    host.agentOutput = (_) => [
+          jsonEncode({'type': 'text_delta', 'delta': 'Refactor finished.'}),
+          jsonEncode({'type': 'result', 'status': 'SUCCESS', 'conversation_id': 'conv-9'}),
+        ];
+
+    tester.view.physicalSize = const Size(1080, 2340);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(AntigravityMobileApp(storage: storage, connector: connector));
+    await settle(tester);
+    await tester.tap(find.text('VPS'));
+    await settle(tester, 30);
+    await tester.tap(find.text('project'));
+    await settle(tester, 40);
+
+    final follow = host.commands.firstWhere((c) => c.contains('tail -c'));
+    expect(follow, contains('run-9'));
+    expect(follow, contains('tail -c +121'));
+    expect(find.textContaining('Starting the refactor.'), findsOneWidget);
+    expect(find.textContaining('Refactor finished.'), findsOneWidget);
+    final saved = await storage.loadConversation('c1');
+    expect(saved!.messages.last.status, MessageStatus.done);
+    expect(saved.agyConversationId, 'conv-9');
   });
 
   testWidgets('rejecting the host key does not connect', (tester) async {
