@@ -1,0 +1,7 @@
+name = "antigravity-push-relay"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Secrets (not stored here):
+#   npx wrangler secret put FCM_SERVICE_ACCOUNT   < service-account.json
+#   npx wrangler secret put PUSH_KEY_SECRET

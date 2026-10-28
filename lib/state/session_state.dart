@@ -32,9 +32,15 @@ class SessionState extends ChangeNotifier {
     HostConnector? connector,
     PushService? push,
   })  : _connector = connector ?? sshConnector,
-        _push = push ?? NoPushService();
+        _push = push ?? NoPushService() {
+    _tokenRefresh = _push.tokenRefresh.listen((_) {
+      final agy = _agy;
+      if (agy != null && isConnected) unawaited(_syncPush(agy));
+    });
+  }
 
   final PushService _push;
+  StreamSubscription<String>? _tokenRefresh;
 
   /// True once this phone is registered for relay pushes on this server, so
   /// local notifications can be skipped to avoid duplicates.
@@ -264,6 +270,7 @@ class SessionState extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _manualDisconnect = true;
+    _tokenRefresh?.cancel();
     _agy?.host.close();
     super.dispose();
   }

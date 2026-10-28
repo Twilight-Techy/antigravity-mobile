@@ -27,6 +27,18 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
+  relay:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+
   android:
     needs: test
     runs-on: ubuntu-latest
@@ -42,7 +54,14 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter build apk --release --split-per-abi
+      # FCM is enabled only when these repository secrets are set.
+      - run: >
+          flutter build apk --release --split-per-abi
+          --dart-define=FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+          --dart-define=FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
+          --dart-define=FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
+          --dart-define=FIREBASE_SENDER_ID=${{ secrets.FIREBASE_SENDER_ID }}
+          --dart-define=PUSH_RELAY_URL=${{ secrets.PUSH_RELAY_URL }}
       - uses: actions/upload-artifact@v4
         with:
           name: android-apks
