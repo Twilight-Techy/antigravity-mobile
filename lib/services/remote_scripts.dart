@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'windows_pty.dart';
+
 /// What the server does when a run ends: post to ntfy (if [ntfyUrl] is set)
 /// and ask the push relay to notify every registered device (FCM). [link]
 /// opens the conversation in the app. Only the workspace name and outcome are sent,
@@ -535,6 +537,11 @@ fi
 class PowerShellScripts extends RemoteScripts {
   const PowerShellScripts();
 
+  /// Names the compiled [windowsPtySource], so a changed source is rebuilt.
+  static final _ptyVersion = windowsPtySource.codeUnits
+      .fold<int>(0x811c9dc5, (h, c) => ((h ^ c) * 0x01000193) & 0xffffffff)
+      .toRadixString(16);
+
   static const _runDir = r'$env:USERPROFILE\.antigravity-mobile\runs';
 
   @override
@@ -968,6 +975,7 @@ Stop-Tree \$root
     required List<String> agyArgs,
     String? tmuxSession,
   }) {
+    if (tmuxSession != null) return _persistentTerminal(cwd, runAgy, agyArgs, tmuxSession);
     final body = '''
 ${_env()}
 Set-Location -LiteralPath ${_path(cwd)} -ErrorAction SilentlyContinue
@@ -981,6 +989,58 @@ ${runAgy ? '& agy ${agyArgs.map(quote).join(' ')}' : ''}
     }
     return 'powershell -NoLogo -ExecutionPolicy Bypass ${runAgy ? '' : '-NoExit '}'
         '-EncodedCommand ${base64.encode(units)}';
+  }
+
+  /// The terminal in a session that survives the connection, like tmux:
+  /// a ConPTY host started through WMI (outside the SSH session) runs the
+  /// program, and this session attaches to it over a named pipe
+  /// ([windowsPtySource]). Reattaching repaints the screen.
+  String _persistentTerminal(String cwd, bool runAgy, List<String> agyArgs, String session) {
+    final args = agyArgs.map((a) => '"${msvcEscape(a)}"').join(' ');
+    // The host gets the user's default environment, so the start script
+    // fills in what it resolved (`__AGM_…__`); the API key is read from its
+    // file, never put on a command line.
+    const hostScript = '''
+\$H = '__AGM_HOME__'
+\$k = "\$H\\.antigravity-mobile\\gemini_api_key"
+if (Test-Path -LiteralPath \$k) { \$env:GEMINI_API_KEY = (Get-Content -Raw -LiteralPath \$k).Trim() }
+\$env:Path = '__AGM_PATH__'
+Add-Type -Path '__AGM_DLL__'
+exit ([AgmPty.Host]::Run('__AGM_NAME__', '__AGM_LINE__', '__AGM_CWD__', 120, 40))
+''';
+    return wrap('''
+${_env()}
+\$ErrorActionPreference = "Stop"
+\$dir = "\$env:USERPROFILE\\.antigravity-mobile"
+New-Item -ItemType Directory -Force -Path \$dir | Out-Null
+\$dll = Join-Path (Resolve-Path -LiteralPath \$dir).Path "agmpty-$_ptyVersion.dll"
+if (-not (Test-Path -LiteralPath \$dll)) {
+  \$tmp = "\$dll.\$PID.tmp"
+  Add-Type -TypeDefinition (${_decode(windowsPtySource)}) -ReferencedAssemblies System.Core -OutputAssembly \$tmp -OutputType Library
+  Move-Item -LiteralPath \$tmp -Destination \$dll -Force -ErrorAction SilentlyContinue
+}
+Add-Type -Path \$dll
+\$name = "agm-\$(\$env:USERNAME)-" + ${quote(session)}
+function Test-Session { [AgmPty.Client]::Exists(\$name) }
+if (-not (Test-Session)) {
+  \$cwd = \$env:USERPROFILE
+  try { \$cwd = (Resolve-Path -LiteralPath ${_path(cwd)}).Path } catch {}
+  ${runAgy ? '\$line = \'"\' + (Get-Command agy).Source + \'" \' + ${quote(args)}' : r"$line = 'powershell.exe -NoLogo'"}
+  \$q = { param(\$v) \$v.Replace("'", "''") }
+  \$hostScript = ${_decode(hostScript)}
+  \$hostScript = \$hostScript.Replace('__AGM_HOME__', (& \$q \$env:USERPROFILE)).Replace('__AGM_PATH__', (& \$q \$env:Path)).Replace('__AGM_DLL__', (& \$q \$dll)).Replace('__AGM_NAME__', (& \$q \$name)).Replace('__AGM_LINE__', (& \$q \$line)).Replace('__AGM_CWD__', (& \$q \$cwd))
+  \$cmd = "powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(\$hostScript))
+  \$started = \$false
+  try {
+    \$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$cmd; CurrentDirectory = \$cwd }
+    \$started = \$r.ReturnValue -eq 0
+  } catch {}
+  if (-not \$started) { Start-Process -FilePath powershell -ArgumentList \$cmd.Substring(11) -WindowStyle Hidden | Out-Null }
+  \$i = 0
+  while (-not (Test-Session) -and \$i -lt 150) { Start-Sleep -Milliseconds 100; \$i++ }
+}
+exit ([AgmPty.Client]::Attach(\$name))
+''');
   }
 }
 

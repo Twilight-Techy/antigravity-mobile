@@ -67,7 +67,8 @@ class TerminalSession extends ChangeNotifier {
   /// Name of the tmux session for this server + workspace (and agy
   /// conversation, when the terminal continues a chat).
   String? get tmuxSessionName {
-    if (!session.profile.useTmux || session.agy?.scripts.isWindows == true) return null;
+    // On Windows servers a ConPTY host stands in for tmux.
+    if (!session.profile.useTmux) return null;
     final ws = '${session.workspace ?? 'home'}${_conversationId == null ? '' : '#$_conversationId'}';
     final base = ws.split(RegExp(r'[\\/]')).where((s) => s.isNotEmpty).lastOrNull ?? 'home';
     final safe = base.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');

@@ -68,7 +68,8 @@ over SSH.
 - **Terminal**: a real VT emulator ([xterm](https://pub.dev/packages/xterm))
   running the full `agy` TUI for `/config`, `/mcp`, `/permissions`, step-by-step
   approvals, etc. It runs inside tmux when available, so sessions survive
-  disconnects. A key bar provides esc/tab/ctrl/arrows/`y`/`n`/^C/^O/^R/^K, and
+  disconnects (on Windows servers, where there is no tmux, a small ConPTY
+  host compiled on the server plays that part). A key bar provides esc/tab/ctrl/arrows/`y`/`n`/^C/^O/^R/^K, and
   links such as the Google sign-in URL are detected and offered as Open/Copy.
 - **Notifications** when the agent finishes while the app is in the
   background. Tapping one opens that conversation.
@@ -200,9 +201,6 @@ at `tool/mock_gemini.py`, a scripted stand-in for the Gemini API:
 
 ## Limitations
 
-- On Windows servers the Terminal tab has no tmux, so an interactive session
-  ends when the connection drops. Chat replies are not affected: they run
-  detached (started through WMI) and resume after a reconnect, as on Linux.
 - Approval prompts are interactive only in the Terminal tab (see above).
 - Settings such as `modelProvider` are kept per store, so a Gemini API key
   set up in the app applies to the CLI's store; desktop-app conversations

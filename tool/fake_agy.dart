@@ -32,8 +32,13 @@ Future<void> main(List<String> args) async {
     }
   }
   if (prompt == null) {
+    // Interactive: echo each line until "exit".
     stdout.writeln('interactive fake agy');
-    return;
+    while (true) {
+      final line = stdin.readLineSync();
+      if (line == null || line.trim() == 'exit') return;
+      stdout.writeln('got ${line.trim()}');
+    }
   }
   File('$dir${Platform.pathSeparator}fake_last_args').writeAsStringSync(jsonEncode(args));
   final id = conversation ?? 'conv-123';
