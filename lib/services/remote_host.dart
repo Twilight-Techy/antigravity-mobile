@@ -54,6 +54,10 @@ abstract class RemoteHost {
   /// Runs [command] (already wrapped for the remote shell) to completion.
   Future<CommandResult> run(String command, {Duration? timeout});
 
+  /// Runs [command] with [input] written to its stdin (then EOF). Used for
+  /// secrets so they never appear in a process list.
+  Future<CommandResult> runWithInput(String command, String input, {Duration? timeout});
+
   /// Starts [command] and streams its output.
   Future<RemoteProcess> start(String command);
 

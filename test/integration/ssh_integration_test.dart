@@ -174,6 +174,23 @@ and a second line ✓''';
     expect(sw.elapsed.inSeconds, lessThan(15));
   }, skip: skip);
 
+  test('stores the API key via stdin in a private file', () async {
+    await agy.setApiKey('AIza-test_key.123');
+    final r = await host.run(
+        "sh -c 'stat -c %a \$HOME/.antigravity-mobile/env; . \$HOME/.antigravity-mobile/env; echo key=\$GEMINI_API_KEY'");
+    expect(r.stdout, contains('600'));
+    expect(r.stdout, contains('key=AIza-test_key.123'));
+    expect((await agy.readSettings())['modelProvider'], 'gemini');
+    // The key never appears in a command line.
+    expect(agy.scripts.saveApiKey(), isNot(contains('AIza')));
+
+    await agy.setApiKey(null);
+    final gone = await host.run("sh -c 'test -f \$HOME/.antigravity-mobile/env && echo yes || echo no'");
+    expect(gone.stdout.trim(), 'no');
+    expect((await agy.readSettings()).containsKey('modelProvider'), isFalse);
+    expect(() => agy.setApiKey("bad'key"), throwsArgumentError);
+  }, skip: skip);
+
   test('opens an interactive PTY running agy', () async {
     final pty = await host.startPty(
       agy.scripts.terminal(cwd: '~/project', runAgy: true, agyArgs: const [], tmuxSession: null),

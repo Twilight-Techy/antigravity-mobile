@@ -77,6 +77,14 @@ class AgentOptions {
         },
       ];
 
+  /// Flags for the interactive TUI, which can ask for approvals itself, so
+  /// the permission mode is left to agy.
+  List<String> toInteractiveArgs() => [
+        if (model != null && model!.isNotEmpty) ...['--model', model!],
+        if (effort != Effort.auto) ...['--effort', effort.name],
+        if (sandbox) '--sandbox',
+      ];
+
   Map<String, dynamic> toJson() => {
         'model': model,
         'permissionMode': permissionMode.name,

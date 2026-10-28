@@ -56,7 +56,7 @@ class _SetupViewState extends State<SetupView> {
   Future<void> _signIn() async {
     final session = context.read<SessionState>();
     final terminal = context.read<TerminalSession>();
-    await terminal.start();
+    await terminal.start(persist: false);
     if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ChangeNotifierProvider.value(

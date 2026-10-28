@@ -88,7 +88,14 @@ class SessionState extends ChangeNotifier {
       final host = await _connector(profile, _secrets, _verifyHostKey);
       _progress = 'Checking the server…';
       _notify();
-      final agy = await AgyService.detect(host, apiKey: _secrets.geminiApiKey);
+      final agy = await AgyService.detect(host);
+      final key = _secrets.geminiApiKey;
+      if (key != null && agy.info.agyInstalled) {
+        // Apply a key entered in the server form.
+        try {
+          await agy.setApiKey(key);
+        } catch (_) {}
+      }
       _agy?.host.close();
       _agy = agy;
       unawaited(host.done.then((_) => _onClosed(host), onError: (_) => _onClosed(host)));
@@ -182,10 +189,7 @@ class SessionState extends ChangeNotifier {
       geminiApiKey: value,
     );
     await storage.saveSecrets(profile.id, _secrets);
-    if (agy != null) {
-      agy.apiKey = value;
-      await agy.setUseApiKey(value != null);
-    }
+    if (agy != null) await agy.setApiKey(value);
     await checkAuth();
   }
 

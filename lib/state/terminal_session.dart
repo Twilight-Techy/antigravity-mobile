@@ -43,6 +43,7 @@ class TerminalSession extends ChangeNotifier {
   TerminalMode? _mode;
   TerminalMode? get mode => _mode;
   List<String> _extraArgs = const [];
+  bool _persist = true;
 
   bool get running => _pty != null;
   bool _starting = false;
@@ -66,7 +67,13 @@ class TerminalSession extends ChangeNotifier {
     return 'agm-${safe.length > 20 ? safe.substring(0, 20) : safe}-$hash';
   }
 
-  Future<void> start({TerminalMode mode = TerminalMode.agy, List<String> extraArgs = const []}) async {
+  /// Starts the terminal. [persist] keeps agy in tmux across disconnects;
+  /// one-off sessions such as sign-in pass false.
+  Future<void> start({
+    TerminalMode mode = TerminalMode.agy,
+    List<String> extraArgs = const [],
+    bool persist = true,
+  }) async {
     final agy = session.agy;
     if (agy == null || !session.isConnected || _starting) return;
     _starting = true;
@@ -75,12 +82,12 @@ class TerminalSession extends ChangeNotifier {
     await _closePty();
     _mode = mode;
     _extraArgs = extraArgs;
+    _persist = persist;
     final command = agy.scripts.terminal(
       cwd: session.workspace ?? '~',
       runAgy: mode == TerminalMode.agy,
-      agyArgs: [...session.profile.agentOptions.toArgs(), ...extraArgs],
-      tmuxSession: mode == TerminalMode.agy ? tmuxSessionName : null,
-      apiKey: agy.apiKey,
+      agyArgs: [...session.profile.agentOptions.toInteractiveArgs(), ...extraArgs],
+      tmuxSession: mode == TerminalMode.agy && persist ? tmuxSessionName : null,
     );
     try {
       final pty = await agy.host.startPty(command, columns: _columns, rows: _rows);
@@ -150,7 +157,7 @@ class TerminalSession extends ChangeNotifier {
       // Reconnected: re-attach (tmux keeps agy alive on the server).
       if (_mode != null) {
         terminal.write('\r\n\x1b[2m[reconnecting…]\x1b[0m\r\n');
-        unawaited(start(mode: _mode!, extraArgs: _extraArgs));
+        unawaited(start(mode: _mode!, extraArgs: _extraArgs, persist: _persist));
       }
     }
   }

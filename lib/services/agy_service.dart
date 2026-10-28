@@ -179,22 +179,21 @@ class GitStatus {
 /// High-level operations against the VPS: setup checks, the file browser,
 /// git, and headless agent runs.
 class AgyService {
-  AgyService(this.host, this.scripts, this.info, {this.apiKey});
+  AgyService(this.host, this.scripts, this.info);
 
   final RemoteHost host;
   final RemoteScripts scripts;
   HostInfo info;
-  String? apiKey;
 
   /// Detects the remote shell dialect and gathers [HostInfo].
-  static Future<AgyService> detect(RemoteHost host, {String? apiKey}) async {
+  static Future<AgyService> detect(RemoteHost host) async {
     const posix = PosixScripts();
     try {
       final r = await host.run(posix.probe(), timeout: const Duration(seconds: 20));
       final p = parseProbe(r.stdout);
       final os = (p['os'] ?? '').toLowerCase();
       if (r.ok && os.isNotEmpty && !os.startsWith('mingw') && !os.startsWith('msys') && !os.startsWith('cygwin')) {
-        return AgyService(host, posix, HostInfo.fromProbe(p), apiKey: apiKey);
+        return AgyService(host, posix, HostInfo.fromProbe(p));
       }
     } catch (_) {}
     const ps = PowerShellScripts();
@@ -205,7 +204,7 @@ class AgyService {
           'Could not detect the remote operating system. A POSIX shell (Linux/macOS) or PowerShell (Windows) is required.',
           r);
     }
-    return AgyService(host, ps, HostInfo.fromProbe(p), apiKey: apiKey);
+    return AgyService(host, ps, HostInfo.fromProbe(p));
   }
 
   Future<HostInfo> refreshInfo() async {
@@ -238,7 +237,7 @@ class AgyService {
   Future<AuthCheck> checkAuth() async {
     final CommandResult r;
     try {
-      r = await host.run(scripts.listModels(apiKey: apiKey),
+      r = await host.run(scripts.listModels(),
           timeout: const Duration(seconds: 45));
     } catch (e) {
       return AuthCheck(AuthState.unknown, detail: e.toString());
@@ -317,13 +316,21 @@ class AgyService {
     if (!r.ok) throw RemoteCommandException('Could not write agy settings.', r);
   }
 
-  /// Switches agy between Google sign-in and a Gemini API key.
-  Future<void> setUseApiKey(bool useApiKey) async {
+  /// Switches agy between Google sign-in and a Gemini API key. The key is
+  /// sent over stdin and stored in a file only the user can read.
+  Future<void> setApiKey(String? key) async {
+    if (key != null && !RegExp(r'^[A-Za-z0-9_\-.]+$').hasMatch(key)) {
+      throw ArgumentError('That does not look like an API key.');
+    }
     final settings = await readSettings();
-    if (useApiKey) {
+    if (key != null) {
+      final r = await host.runWithInput(scripts.saveApiKey(), key);
+      if (!r.ok) throw RemoteCommandException('Could not save the API key.', r);
+      if (settings['modelProvider'] == 'gemini') return;
       settings['modelProvider'] = 'gemini';
     } else {
-      settings.remove('modelProvider');
+      await host.run(scripts.clearApiKey());
+      if (settings.remove('modelProvider') == null) return;
     }
     await writeSettings(settings);
   }
@@ -472,7 +479,6 @@ class AgentRun {
       cwd: cwd,
       prompt: prompt,
       agyArgs: agyArgs,
-      apiKey: service.apiKey,
     );
     if (scripts.isWindows) {
       await _follow(command, 0);

@@ -30,9 +30,15 @@ abstract class RemoteScripts {
   String installTmux();
 
   /// Runs `agy models` non-interactively, used as the "signed in?" check.
-  String listModels({String? apiKey});
+  String listModels();
 
   String readAgySettings();
+
+  /// Stores the text sent on stdin as the Gemini API key in a file only the
+  /// user can read, so it never appears in a command line.
+  String saveApiKey();
+
+  String clearApiKey();
 
   String writeAgySettings(String json);
 
@@ -59,7 +65,6 @@ abstract class RemoteScripts {
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
-    String? apiKey,
   });
 
   /// Follows a detached run from byte [offset]; stdout carries the agent
@@ -74,7 +79,6 @@ abstract class RemoteScripts {
     required bool runAgy,
     required List<String> agyArgs,
     String? tmuxSession,
-    String? apiKey,
   });
 
   static String b64(String s) => base64.encode(utf8.encode(s));
@@ -94,10 +98,9 @@ class PosixScripts extends RemoteScripts {
   /// Wraps a script so it runs under `sh` whatever the login shell is.
   String wrap(String script) => 'sh -c ${quote(script)}';
 
-  String _env(String? apiKey) => [
+  String _env() => [
         r'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"',
-        if (apiKey != null && apiKey.isNotEmpty)
-          'export GEMINI_API_KEY=${quote(apiKey)}',
+        r'[ -f "$HOME/.antigravity-mobile/env" ] && . "$HOME/.antigravity-mobile/env"',
       ].join('\n');
 
   /// Expands a leading `~` the way a shell would, but keeps the rest quoted.
@@ -111,7 +114,7 @@ class PosixScripts extends RemoteScripts {
 
   @override
   String probe() => wrap('''
-${_env(null)}
+${_env()}
 echo "os=\$(uname -s 2>/dev/null)"
 echo "arch=\$(uname -m 2>/dev/null)"
 echo "home=\$HOME"
@@ -144,7 +147,7 @@ if [ "\$(id -u 2>/dev/null)" = 0 ] || sudo -n true 2>/dev/null; then echo "sudo=
 
   @override
   String installAgy() => wrap('''
-${_env(null)}
+${_env()}
 set -e
 if ! command -v bash >/dev/null 2>&1; then echo "bash is required to run the Antigravity installer." >&2; exit 20; fi
 if command -v curl >/dev/null 2>&1; then
@@ -177,14 +180,26 @@ fi
 ''');
 
   @override
-  String listModels({String? apiKey}) => wrap('''
-${_env(apiKey)}
+  String listModels() => wrap('''
+${_env()}
 agy models < /dev/null 2>&1
 ''');
 
   @override
   String readAgySettings() =>
       wrap(r'cat "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true');
+
+  @override
+  String saveApiKey() => wrap(r'''
+umask 077
+mkdir -p "$HOME/.antigravity-mobile"
+K=$(cat)
+printf "export GEMINI_API_KEY='%s'\n" "$K" > "$HOME/.antigravity-mobile/env"
+chmod 600 "$HOME/.antigravity-mobile/env"
+''');
+
+  @override
+  String clearApiKey() => wrap(r'rm -f "$HOME/.antigravity-mobile/env"');
 
   @override
   String writeAgySettings(String json) => wrap('''
@@ -234,7 +249,6 @@ head -c $maxBytes -- "\$F" | base64
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
-    String? apiKey,
   }) {
     final f = '$_runDir/$runId';
     final args = agyArgs.map(quote).join(' ');
@@ -246,7 +260,7 @@ wait \$A
 echo \$? > "$f.exit"
 ''';
     return wrap('''
-${_env(apiKey)}
+${_env()}
 $_b64d
 mkdir -p "$_runDir"
 find "$_runDir" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
@@ -308,17 +322,16 @@ true
     required bool runAgy,
     required List<String> agyArgs,
     String? tmuxSession,
-    String? apiKey,
   }) {
     final program = runAgy
         ? 'agy ${agyArgs.map(quote).join(' ')}'
         : r'exec "${SHELL:-/bin/sh}" -l';
-    final inner = '${_env(apiKey)}\ncd -- ${_path(cwd)} 2>/dev/null\n$program';
+    final inner = '${_env()}\ncd -- ${_path(cwd)} 2>/dev/null\n$program';
     if (tmuxSession == null) {
-      return wrap('${_env(apiKey)}\nexport TERM=xterm-256color\n$inner');
+      return wrap('${_env()}\nexport TERM=xterm-256color\n$inner');
     }
     return wrap('''
-${_env(apiKey)}
+${_env()}
 export TERM=xterm-256color
 if command -v tmux >/dev/null 2>&1; then
   exec tmux new-session -A -s ${quote(tmuxSession)} sh -c ${quote(inner)} \\; set-option status off \\; set-option mouse on
@@ -355,10 +368,10 @@ class PowerShellScripts extends RemoteScripts {
         '-ExecutionPolicy Bypass -EncodedCommand ${base64.encode(units)}';
   }
 
-  String _env(String? apiKey) => [
+  String _env() => [
         r'$env:Path = [Environment]::GetEnvironmentVariable("Path","User") + ";" + [Environment]::GetEnvironmentVariable("Path","Machine") + ";$env:USERPROFILE\.local\bin"',
-        if (apiKey != null && apiKey.isNotEmpty)
-          '\$env:GEMINI_API_KEY=${quote(apiKey)}',
+        r'$agmKey = "$env:USERPROFILE\.antigravity-mobile\gemini_api_key"',
+        r'if (Test-Path -LiteralPath $agmKey) { $env:GEMINI_API_KEY = (Get-Content -Raw -LiteralPath $agmKey).Trim() }',
       ].join('\n');
 
   String _path(String path) {
@@ -396,7 +409,7 @@ class PowerShellScripts extends RemoteScripts {
 
   @override
   String probe() => wrap('''
-${_env(null)}
+${_env()}
 "os=Windows"
 "arch=\$env:PROCESSOR_ARCHITECTURE"
 "home=\$env:USERPROFILE"
@@ -428,10 +441,10 @@ if (\$a) { "version=\$((& agy --version 2>\$null | Select-Object -First 1))" } e
 
   @override
   String installAgy() => wrap('''
-${_env(null)}
+${_env()}
 \$ErrorActionPreference = "Stop"
 irm https://antigravity.google/cli/install.ps1 | iex
-${_env(null)}
+${_env()}
 "Installed: \$((& agy --version 2>\$null | Select-Object -First 1))"
 ''');
 
@@ -440,11 +453,23 @@ ${_env(null)}
       '[Console]::Error.WriteLine("tmux is not available on Windows. Terminal sessions will not persist across disconnects."); exit 12');
 
   @override
-  String listModels({String? apiKey}) => wrap('''
-${_env(apiKey)}
+  String listModels() => wrap('''
+${_env()}
 & agy models 2>&1 | ForEach-Object { "\$_" }
 exit \$LASTEXITCODE
 ''');
+
+  @override
+  String saveApiKey() => wrap(r'''
+$d = "$env:USERPROFILE\.antigravity-mobile"
+New-Item -ItemType Directory -Force -Path $d | Out-Null
+$k = [Console]::In.ReadToEnd().Trim()
+[IO.File]::WriteAllText("$d\gemini_api_key", $k)
+''');
+
+  @override
+  String clearApiKey() =>
+      wrap(r'Remove-Item -Force -ErrorAction SilentlyContinue "$env:USERPROFILE\.antigravity-mobile\gemini_api_key"');
 
   @override
   String readAgySettings() => wrap(
@@ -506,10 +531,9 @@ exit 0
     required String cwd,
     required String prompt,
     required List<String> agyArgs,
-    String? apiKey,
   }) =>
       wrap('''
-${_env(apiKey)}
+${_env()}
 \$d = "$_runDir"
 New-Item -ItemType Directory -Force -Path \$d | Out-Null
 Set-Content -LiteralPath "\$d\\$runId.pid" -Value \$PID
@@ -546,10 +570,9 @@ Stop-Tree \$root
     required bool runAgy,
     required List<String> agyArgs,
     String? tmuxSession,
-    String? apiKey,
   }) {
     final body = '''
-${_env(apiKey)}
+${_env()}
 Set-Location -LiteralPath ${_path(cwd)} -ErrorAction SilentlyContinue
 ${runAgy ? '& agy ${agyArgs.map(quote).join(' ')}' : ''}
 ''';

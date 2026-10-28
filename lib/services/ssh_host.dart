@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
@@ -93,6 +94,16 @@ class SshHost implements RemoteHost {
   Future<CommandResult> run(String command, {Duration? timeout}) async {
     final process = await start(command);
     return collect(process, timeout: timeout);
+  }
+
+  @override
+  Future<CommandResult> runWithInput(String command, String input, {Duration? timeout}) async {
+    final session = await _client.execute(command);
+    final process = _SshProcess(session);
+    final result = collect(process, timeout: timeout);
+    session.stdin.add(Uint8List.fromList(utf8.encode(input)));
+    await session.stdin.close();
+    return result;
   }
 
   @override

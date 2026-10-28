@@ -90,6 +90,15 @@ class FakeHost implements RemoteHost {
     return _answer(script);
   }
 
+  final Map<String, String> stdinFor = {};
+
+  @override
+  Future<CommandResult> runWithInput(String command, String input, {Duration? timeout}) async {
+    commands.add(command);
+    stdinFor[command] = input;
+    return const CommandResult(0, '', '');
+  }
+
   @override
   Future<RemoteProcess> start(String command) async {
     commands.add(command);
