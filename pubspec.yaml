@@ -1,0 +1,23 @@
+name: antigravity_mobile
+description: A mobile client for Antigravity using dartssh2.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dartssh2: ^2.0.1
+  provider: ^6.1.1
+  flutter_markdown: ^0.6.18
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
